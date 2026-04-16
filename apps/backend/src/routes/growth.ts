@@ -10,182 +10,182 @@ import { extractIp, logAudit } from "../utils/audit.js";
 export const growthRouter = Router();
 
 const aiDiagnosisSchema = z.object({
-  apiKey: z.string().min(10),
-  model: z.string().min(3)
+    apiKey: z.string().min(10),
+    model: z.string().min(3)
 });
 
 growthRouter.get("/students/:studentId/profile", requireAuth, (req: AuthedRequest, res) => {
-  const studentId = Number(req.params.studentId);
-  if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
-    res.status(403).json({ success: false, message: "无权查看该学生档案" });
-    return;
-  }
+    const studentId = Number(req.params.studentId);
+    if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
+        res.status(403).json({ success: false, message: "无权查看该学生档案" });
+        return;
+    }
 
-  const student = db
-    .prepare(
-      `SELECT id, student_no as studentNo, name, grade, class_name as className,
+    const student = db
+        .prepare(
+            `SELECT id, student_no as studentNo, name, grade, class_name as className,
               subject_combination as subjectCombination, interests, career_goal as careerGoal
        FROM students WHERE id = ?`
-    )
-    .get(studentId);
+        )
+        .get(studentId);
 
-  const profile = db
-    .prepare(
-      `SELECT summary, risk_level as riskLevel, last_updated as lastUpdated
+    const profile = db
+        .prepare(
+            `SELECT summary, risk_level as riskLevel, last_updated as lastUpdated
        FROM growth_profiles WHERE student_id = ?`
-    )
-    .get(studentId);
+        )
+        .get(studentId);
 
-  res.json({ success: true, message: "查询成功", data: { student, profile } });
+    res.json({ success: true, message: "查询成功", data: { student, profile } });
 });
 
 growthRouter.get("/students/:studentId/trends", requireAuth, (req: AuthedRequest, res) => {
-  const studentId = Number(req.params.studentId);
-  if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
-    res.status(403).json({ success: false, message: "无权查看该学生趋势数据" });
-    return;
-  }
+    const studentId = Number(req.params.studentId);
+    if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
+        res.status(403).json({ success: false, message: "无权查看该学生趋势数据" });
+        return;
+    }
 
-  const rows = db
-    .prepare(
-      `SELECT exam_name as examName, subject, score
+    const rows = db
+        .prepare(
+            `SELECT exam_name as examName, subject, score
        FROM exam_results
        WHERE student_id = ?
        ORDER BY exam_date ASC`
-    )
-    .all(studentId) as Array<{ examName: string; subject: string; score: number }>;
+        )
+        .all(studentId) as Array<{ examName: string; subject: string; score: number }>;
 
-  const grouped = new Map<string, { examName: string; count: number; total: number }>();
-  for (const row of rows) {
-    if (!grouped.has(row.examName)) {
-      grouped.set(row.examName, { examName: row.examName, count: 0, total: 0 });
+    const grouped = new Map<string, { examName: string; count: number; total: number }>();
+    for (const row of rows) {
+        if (!grouped.has(row.examName)) {
+            grouped.set(row.examName, { examName: row.examName, count: 0, total: 0 });
+        }
+        const item = grouped.get(row.examName);
+        if (item) {
+            item.count += 1;
+            item.total += row.score;
+        }
     }
-    const item = grouped.get(row.examName);
-    if (item) {
-      item.count += 1;
-      item.total += row.score;
-    }
-  }
 
-  const trend = Array.from(grouped.values()).map((item) => ({
-    examName: item.examName,
-    avgScore: Number((item.total / item.count).toFixed(1))
-  }));
+    const trend = Array.from(grouped.values()).map((item) => ({
+        examName: item.examName,
+        avgScore: Number((item.total / item.count).toFixed(1))
+    }));
 
-  res.json({ success: true, message: "查询成功", data: trend });
+    res.json({ success: true, message: "查询成功", data: trend });
 });
 
 growthRouter.get("/students/:studentId/alerts", requireAuth, (req: AuthedRequest, res) => {
-  const studentId = Number(req.params.studentId);
-  if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
-    res.status(403).json({ success: false, message: "无权查看该学生预警" });
-    return;
-  }
+    const studentId = Number(req.params.studentId);
+    if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
+        res.status(403).json({ success: false, message: "无权查看该学生预警" });
+        return;
+    }
 
-  const rows = db
-    .prepare(
-      `SELECT id, alert_type as alertType, content, status, created_at as createdAt
+    const rows = db
+        .prepare(
+            `SELECT id, alert_type as alertType, content, status, created_at as createdAt
        FROM alerts WHERE student_id = ?
        ORDER BY created_at DESC`
-    )
-    .all(studentId);
+        )
+        .all(studentId);
 
-  res.json({ success: true, message: "查询成功", data: rows });
+    res.json({ success: true, message: "查询成功", data: rows });
 });
 
 growthRouter.post("/students/:studentId/ai-diagnosis", requireAuth, async (req: AuthedRequest, res) => {
-  const studentId = Number(req.params.studentId);
-  const parsed = aiDiagnosisSchema.safeParse(req.body);
-  if (Number.isNaN(studentId) || !parsed.success || !req.user) {
-    res.status(400).json({ success: false, message: "参数不合法" });
-    return;
-  }
+    const studentId = Number(req.params.studentId);
+    const parsed = aiDiagnosisSchema.safeParse(req.body);
+    if (Number.isNaN(studentId) || !parsed.success || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
 
-  if (!canAccessStudent(req, studentId)) {
-    res.status(403).json({ success: false, message: "无权分析该学生" });
-    return;
-  }
+    if (!canAccessStudent(req, studentId)) {
+        res.status(403).json({ success: false, message: "无权分析该学生" });
+        return;
+    }
 
-  const template = getTemplateById("growth-risk-v1");
-  if (!template) {
-    res.status(500).json({ success: false, message: "系统未配置成长诊断模板" });
-    return;
-  }
+    const template = getTemplateById("growth-risk-v1");
+    if (!template) {
+        res.status(500).json({ success: false, message: "系统未配置成长诊断模板" });
+        return;
+    }
 
-  const student = db
-    .prepare(
-      `SELECT id, name, grade, class_name as className, interests, career_goal as careerGoal
+    const student = db
+        .prepare(
+            `SELECT id, name, grade, class_name as className, interests, career_goal as careerGoal
        FROM students WHERE id = ?`
-    )
-    .get(studentId) as
-    | { id: number; name: string; grade: string; className: string; interests: string | null; careerGoal: string | null }
-    | undefined;
+        )
+        .get(studentId) as
+        | { id: number; name: string; grade: string; className: string; interests: string | null; careerGoal: string | null }
+        | undefined;
 
-  if (!student) {
-    res.status(404).json({ success: false, message: "学生不存在" });
-    return;
-  }
+    if (!student) {
+        res.status(404).json({ success: false, message: "学生不存在" });
+        return;
+    }
 
-  const trends = db
-    .prepare(
-      `SELECT exam_name as examName, ROUND(AVG(score), 1) as avgScore
+    const trends = db
+        .prepare(
+            `SELECT exam_name as examName, ROUND(AVG(score), 1) as avgScore
        FROM exam_results
        WHERE student_id = ?
        GROUP BY exam_name
        ORDER BY exam_date ASC`
-    )
-    .all(studentId) as Array<{ examName: string; avgScore: number }>;
+        )
+        .all(studentId) as Array<{ examName: string; avgScore: number }>;
 
-  const alerts = db
-    .prepare(
-      `SELECT alert_type as alertType, content, status
+    const alerts = db
+        .prepare(
+            `SELECT alert_type as alertType, content, status
        FROM alerts
        WHERE student_id = ?
        ORDER BY created_at DESC
        LIMIT 6`
-    )
-    .all(studentId) as Array<{ alertType: string; content: string; status: string }>;
+        )
+        .all(studentId) as Array<{ alertType: string; content: string; status: string }>;
 
-  const studentData = [
-    `姓名: ${student.name}`,
-    `班级: ${student.grade} ${student.className}`,
-    `兴趣: ${student.interests ?? "暂无"}`,
-    `目标: ${student.careerGoal ?? "暂无"}`,
-    `趋势: ${trends.map((item) => `${item.examName}:${item.avgScore}`).join("; ") || "暂无"}`,
-    `预警: ${alerts.map((item) => `${item.alertType}-${item.content}-${item.status}`).join("; ") || "暂无"}`
-  ].join("\n");
+    const studentData = [
+        `姓名: ${student.name}`,
+        `班级: ${student.grade} ${student.className}`,
+        `兴趣: ${student.interests ?? "暂无"}`,
+        `目标: ${student.careerGoal ?? "暂无"}`,
+        `趋势: ${trends.map((item) => `${item.examName}:${item.avgScore}`).join("; ") || "暂无"}`,
+        `预警: ${alerts.map((item) => `${item.alertType}-${item.content}-${item.status}`).join("; ") || "暂无"}`
+    ].join("\n");
 
-  const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
+    const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
 
-  try {
-    const answer = await callZhipu({
-      apiKey: parsed.data.apiKey,
-      model: parsed.data.model,
-      prompt,
-      systemPrompt: template.systemPrompt,
-      enableThinking: parsed.data.model.includes("thinking") || parsed.data.model === "glm-4.7-flash"
-    });
+    try {
+        const answer = await callZhipu({
+            apiKey: parsed.data.apiKey,
+            model: parsed.data.model,
+            prompt,
+            systemPrompt: template.systemPrompt,
+            enableThinking: parsed.data.model.includes("thinking") || parsed.data.model === "glm-4.7-flash"
+        });
 
-    logAudit({
-      userId: req.user.id,
-      actionModule: "growth",
-      actionType: "ai_diagnosis",
-      objectType: "student",
-      objectId: studentId,
-      detail: { model: parsed.data.model },
-      ipAddress: extractIp(req)
-    });
+        logAudit({
+            userId: req.user.id,
+            actionModule: "growth",
+            actionType: "ai_diagnosis",
+            objectType: "student",
+            objectId: studentId,
+            detail: { model: parsed.data.model },
+            ipAddress: extractIp(req)
+        });
 
-    res.json({
-      success: true,
-      message: "分析完成",
-      data: {
-        studentId,
-        answer
-      }
-    });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "未知错误";
-    res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });
-  }
+        res.json({
+            success: true,
+            message: "分析完成",
+            data: {
+                studentId,
+                answer
+            }
+        });
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : "未知错误";
+        res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });
+    }
 });

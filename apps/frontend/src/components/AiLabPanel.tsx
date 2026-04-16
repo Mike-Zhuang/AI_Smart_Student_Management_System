@@ -127,25 +127,25 @@ export const AiLabPanel = () => {
 
             const response = useTemplate && selectedTemplateId
                 ? await apiRequest<{ answer: string }>("/api/ai/chat-with-template", {
-                        method: "POST",
-                        body: JSON.stringify({
-                            apiKey: apiKey.trim(),
-                            model,
-                            templateId: selectedTemplateId,
-                            variables: variableValues,
-                            enableThinking: selectedModel?.thinking ?? false
-                        })
+                    method: "POST",
+                    body: JSON.stringify({
+                        apiKey: apiKey.trim(),
+                        model,
+                        templateId: selectedTemplateId,
+                        variables: variableValues,
+                        enableThinking: selectedModel?.thinking ?? false
                     })
+                })
                 : await apiRequest<{ answer: string }>("/api/ai/chat", {
-                        method: "POST",
-                        body: JSON.stringify({
-                            apiKey: apiKey.trim(),
-                            model,
-                            prompt,
-                            multimodal,
-                            enableThinking: selectedModel?.thinking ?? false
-                        })
-                    });
+                    method: "POST",
+                    body: JSON.stringify({
+                        apiKey: apiKey.trim(),
+                        model,
+                        prompt,
+                        multimodal,
+                        enableThinking: selectedModel?.thinking ?? false
+                    })
+                });
 
             setAnswer(response.data.answer);
         } catch (err) {

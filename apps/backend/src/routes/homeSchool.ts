@@ -188,7 +188,7 @@ homeSchoolRouter.get("/leave-requests", requireAuth, (req: AuthedRequest, res) =
                         )
          ORDER BY lr.created_at DESC`
             )
-                        .all(req.user.id, req.user.id);
+            .all(req.user.id, req.user.id);
     }
 
     res.json({ success: true, message: "查询成功", data: rows });

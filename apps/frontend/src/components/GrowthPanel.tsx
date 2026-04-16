@@ -5,196 +5,196 @@ import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
 type Student = {
-  id: number;
-  name: string;
-  grade: string;
-  className: string;
-};
-
-type ProfileData = {
-  student: {
     id: number;
     name: string;
     grade: string;
     className: string;
-    interests: string;
-    careerGoal: string;
-  };
-  profile: {
-    summary: string;
-    riskLevel: string;
-    lastUpdated: string;
-  };
+};
+
+type ProfileData = {
+    student: {
+        id: number;
+        name: string;
+        grade: string;
+        className: string;
+        interests: string;
+        careerGoal: string;
+    };
+    profile: {
+        summary: string;
+        riskLevel: string;
+        lastUpdated: string;
+    };
 };
 
 type Trend = { examName: string; avgScore: number };
 
 type Alert = {
-  id: number;
-  alertType: string;
-  content: string;
-  status: string;
-  createdAt: string;
+    id: number;
+    alertType: string;
+    content: string;
+    status: string;
+    createdAt: string;
 };
 
 export const GrowthPanel = ({ user }: { user: User }) => {
-  const [students, setStudents] = useState<Student[]>([]);
-  const [studentId, setStudentId] = useState<number | null>(user.linkedStudentId);
-  const [profile, setProfile] = useState<ProfileData | null>(null);
-  const [trends, setTrends] = useState<Trend[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [apiKey, setApiKey] = useState(storage.getApiKey());
-  const [aiSummary, setAiSummary] = useState("");
-  const [error, setError] = useState("");
+    const [students, setStudents] = useState<Student[]>([]);
+    const [studentId, setStudentId] = useState<number | null>(user.linkedStudentId);
+    const [profile, setProfile] = useState<ProfileData | null>(null);
+    const [trends, setTrends] = useState<Trend[]>([]);
+    const [alerts, setAlerts] = useState<Alert[]>([]);
+    const [apiKey, setApiKey] = useState(storage.getApiKey());
+    const [aiSummary, setAiSummary] = useState("");
+    const [error, setError] = useState("");
 
-  useEffect(() => {
-    const loadStudents = async () => {
-      try {
-        const response = await apiRequest<Student[]>("/api/students");
-        setStudents(response.data.slice(0, 60));
-        if (!studentId && response.data.length > 0) {
-          setStudentId(response.data[0].id);
+    useEffect(() => {
+        const loadStudents = async () => {
+            try {
+                const response = await apiRequest<Student[]>("/api/students");
+                setStudents(response.data.slice(0, 60));
+                if (!studentId && response.data.length > 0) {
+                    setStudentId(response.data[0].id);
+                }
+            } catch (err) {
+                setError(err instanceof Error ? err.message : "加载学生失败");
+            }
+        };
+
+        void loadStudents();
+    }, [studentId]);
+
+    useEffect(() => {
+        if (!studentId) {
+            return;
         }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "加载学生失败");
-      }
-    };
 
-    void loadStudents();
-  }, [studentId]);
+        const load = async () => {
+            try {
+                const [profileResp, trendResp, alertResp] = await Promise.all([
+                    apiRequest<ProfileData>(`/api/growth/students/${studentId}/profile`),
+                    apiRequest<Trend[]>(`/api/growth/students/${studentId}/trends`),
+                    apiRequest<Alert[]>(`/api/growth/students/${studentId}/alerts`)
+                ]);
+                setProfile(profileResp.data);
+                setTrends(trendResp.data);
+                setAlerts(alertResp.data);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : "加载成长数据失败");
+            }
+        };
 
-  useEffect(() => {
-    if (!studentId) {
-      return;
-    }
+        void load();
+    }, [studentId]);
 
-    const load = async () => {
-      try {
-        const [profileResp, trendResp, alertResp] = await Promise.all([
-          apiRequest<ProfileData>(`/api/growth/students/${studentId}/profile`),
-          apiRequest<Trend[]>(`/api/growth/students/${studentId}/trends`),
-          apiRequest<Alert[]>(`/api/growth/students/${studentId}/alerts`)
-        ]);
-        setProfile(profileResp.data);
-        setTrends(trendResp.data);
-        setAlerts(alertResp.data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "加载成长数据失败");
-      }
-    };
+    const riskLabel = useMemo(() => {
+        if (!profile?.profile.riskLevel) {
+            return "--";
+        }
 
-    void load();
-  }, [studentId]);
+        const map: Record<string, string> = {
+            high: "高风险",
+            medium: "中风险",
+            low: "低风险"
+        };
 
-  const riskLabel = useMemo(() => {
-    if (!profile?.profile.riskLevel) {
-      return "--";
-    }
+        return map[profile.profile.riskLevel] ?? profile.profile.riskLevel;
+    }, [profile]);
 
-    const map: Record<string, string> = {
-      high: "高风险",
-      medium: "中风险",
-      low: "低风险"
-    };
+    return (
+        <section className="panel-grid">
+            <article className="panel-card wide">
+                <h3>学生学业成长追踪</h3>
+                <div className="inline-form">
+                    <label>
+                        选择学生
+                        <select
+                            value={studentId ?? ""}
+                            onChange={(event) => setStudentId(Number(event.target.value))}
+                            disabled={students.length <= 1 && (user.role === "parent" || user.role === "student")}
+                        >
+                            {students.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                    {item.name} / {item.grade} / {item.className}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        AI Key（用于风险诊断）
+                        <input
+                            value={apiKey}
+                            onChange={(event) => setApiKey(event.target.value)}
+                            placeholder="请输入可用的 API Key"
+                        />
+                    </label>
+                    <button
+                        className="secondary-btn"
+                        onClick={async () => {
+                            if (!studentId || !apiKey.trim()) {
+                                setError("请先选择学生并填写 API Key");
+                                return;
+                            }
 
-    return map[profile.profile.riskLevel] ?? profile.profile.riskLevel;
-  }, [profile]);
+                            try {
+                                storage.setApiKey(apiKey.trim());
+                                const response = await apiRequest<{ answer: string }>(`/api/growth/students/${studentId}/ai-diagnosis`, {
+                                    method: "POST",
+                                    body: JSON.stringify({ apiKey: apiKey.trim(), model: "glm-4.7-flash" })
+                                });
+                                setAiSummary(response.data.answer);
+                            } catch (err) {
+                                setError(err instanceof Error ? err.message : "AI诊断失败");
+                            }
+                        }}
+                    >
+                        AI风险诊断
+                    </button>
+                </div>
+            </article>
 
-  return (
-    <section className="panel-grid">
-      <article className="panel-card wide">
-        <h3>学生学业成长追踪</h3>
-        <div className="inline-form">
-          <label>
-            选择学生
-            <select
-              value={studentId ?? ""}
-              onChange={(event) => setStudentId(Number(event.target.value))}
-              disabled={students.length <= 1 && (user.role === "parent" || user.role === "student")}
-            >
-              {students.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} / {item.grade} / {item.className}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            AI Key（用于风险诊断）
-            <input
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="请输入可用的 API Key"
-            />
-          </label>
-          <button
-            className="secondary-btn"
-            onClick={async () => {
-              if (!studentId || !apiKey.trim()) {
-                setError("请先选择学生并填写 API Key");
-                return;
-              }
+            <article className="panel-card">
+                <h4>成长画像</h4>
+                <p>{profile?.profile.summary}</p>
+                <p>风险等级: {riskLabel}</p>
+                <p>兴趣: {profile?.student.interests || "--"}</p>
+                <p>目标: {profile?.student.careerGoal || "--"}</p>
+            </article>
 
-              try {
-                storage.setApiKey(apiKey.trim());
-                const response = await apiRequest<{ answer: string }>(`/api/growth/students/${studentId}/ai-diagnosis`, {
-                  method: "POST",
-                  body: JSON.stringify({ apiKey: apiKey.trim(), model: "glm-4.7-flash" })
-                });
-                setAiSummary(response.data.answer);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : "AI诊断失败");
-              }
-            }}
-          >
-            AI风险诊断
-          </button>
-        </div>
-      </article>
+            <article className="panel-card">
+                <h4>近期预警</h4>
+                <div className="list-box compact">
+                    {alerts.slice(0, 4).map((item) => (
+                        <div key={item.id} className="list-item">
+                            <strong>{item.alertType}</strong>
+                            <p>{item.content}</p>
+                            <small>{new Date(item.createdAt).toLocaleDateString()}</small>
+                        </div>
+                    ))}
+                </div>
+            </article>
 
-      <article className="panel-card">
-        <h4>成长画像</h4>
-        <p>{profile?.profile.summary}</p>
-        <p>风险等级: {riskLabel}</p>
-        <p>兴趣: {profile?.student.interests || "--"}</p>
-        <p>目标: {profile?.student.careerGoal || "--"}</p>
-      </article>
+            <article className="panel-card wide">
+                <h4>考试均分趋势</h4>
+                <div style={{ width: "100%", height: 280 }}>
+                    <ResponsiveContainer>
+                        <LineChart data={trends}>
+                            <XAxis dataKey="examName" />
+                            <YAxis domain={[40, 100]} />
+                            <Tooltip />
+                            <Line type="monotone" dataKey="avgScore" stroke="#c96442" strokeWidth={3} dot={{ r: 4 }} />
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+            </article>
 
-      <article className="panel-card">
-        <h4>近期预警</h4>
-        <div className="list-box compact">
-          {alerts.slice(0, 4).map((item) => (
-            <div key={item.id} className="list-item">
-              <strong>{item.alertType}</strong>
-              <p>{item.content}</p>
-              <small>{new Date(item.createdAt).toLocaleDateString()}</small>
-            </div>
-          ))}
-        </div>
-      </article>
+            {aiSummary ? (
+                <article className="panel-card wide">
+                    <h4>AI 诊断结果</h4>
+                    <pre className="answer-box">{aiSummary}</pre>
+                </article>
+            ) : null}
 
-      <article className="panel-card wide">
-        <h4>考试均分趋势</h4>
-        <div style={{ width: "100%", height: 280 }}>
-          <ResponsiveContainer>
-            <LineChart data={trends}>
-              <XAxis dataKey="examName" />
-              <YAxis domain={[40, 100]} />
-              <Tooltip />
-              <Line type="monotone" dataKey="avgScore" stroke="#c96442" strokeWidth={3} dot={{ r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </article>
-
-      {aiSummary ? (
-        <article className="panel-card wide">
-          <h4>AI 诊断结果</h4>
-          <pre className="answer-box">{aiSummary}</pre>
-        </article>
-      ) : null}
-
-      {error ? <p className="error-text">{error}</p> : null}
-    </section>
-  );
+            {error ? <p className="error-text">{error}</p> : null}
+        </section>
+    );
 };
