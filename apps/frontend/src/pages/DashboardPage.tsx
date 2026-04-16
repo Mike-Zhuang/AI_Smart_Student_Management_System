@@ -14,42 +14,42 @@ import { useAuth } from "../App";
 const ALLOWED = ["overview", "home-school", "career", "growth", "head-teacher", "teaching", "ai-lab", "data-import"];
 
 export const DashboardPage = () => {
-  const { user, setUser } = useAuth();
-  const params = useParams<{ section?: string }>();
-  const section = params.section ?? "overview";
+    const { user, setUser } = useAuth();
+    const params = useParams<{ section?: string }>();
+    const section = params.section ?? "overview";
 
-  const content = useMemo(() => {
-    switch (section) {
-      case "home-school":
-        return <HomeSchoolPanel />;
-      case "career":
-        return <CareerPanel />;
-      case "growth":
-        return <GrowthPanel user={user!} />;
-      case "head-teacher":
-        return <HeadTeacherPanel />;
-      case "teaching":
-        return <TeachingPanel />;
-      case "ai-lab":
-        return <AiLabPanel />;
-      case "data-import":
-        return <DataImportPanel />;
-      default:
-        return <OverviewPanel user={user!} />;
+    const content = useMemo(() => {
+        switch (section) {
+            case "home-school":
+                return <HomeSchoolPanel />;
+            case "career":
+                return <CareerPanel />;
+            case "growth":
+                return <GrowthPanel user={user!} />;
+            case "head-teacher":
+                return <HeadTeacherPanel />;
+            case "teaching":
+                return <TeachingPanel />;
+            case "ai-lab":
+                return <AiLabPanel />;
+            case "data-import":
+                return <DataImportPanel />;
+            default:
+                return <OverviewPanel user={user!} />;
+        }
+    }, [section, user]);
+
+    if (!user) {
+        return <Navigate to="/login" replace />;
     }
-  }, [section, user]);
 
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
+    if (!ALLOWED.includes(section)) {
+        return <Navigate to="/dashboard/overview" replace />;
+    }
 
-  if (!ALLOWED.includes(section)) {
-    return <Navigate to="/dashboard/overview" replace />;
-  }
-
-  return (
-    <AppShell user={user} onLogout={() => setUser(null)}>
-      {content}
-    </AppShell>
-  );
+    return (
+        <AppShell user={user} onLogout={() => setUser(null)}>
+            {content}
+        </AppShell>
+    );
 };

@@ -1,47 +1,47 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "dev:fullstack:npm",
-      "type": "shell",
-      "command": "npm run dev",
-      "isBackground": true,
-      "problemMatcher": {
-        "pattern": {
-          "regexp": ".*"
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "dev:fullstack:npm",
+            "type": "shell",
+            "command": "npm run dev",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": ".*"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*",
+                    "endsPattern": "Backend running at http://localhost:4000|ready in"
+                }
+            }
         },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": ".*",
-          "endsPattern": "Backend running at http://localhost:4000|ready in"
-        }
-      }
-    },
-    {
-      "label": "dev:fullstack:pnpm",
-      "type": "shell",
-      "command": "pnpm run dev:pnpm",
-      "isBackground": true,
-      "problemMatcher": {
-        "pattern": {
-          "regexp": ".*"
+        {
+            "label": "dev:fullstack:pnpm",
+            "type": "shell",
+            "command": "pnpm run dev:pnpm",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": ".*"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*",
+                    "endsPattern": "Backend running at http://localhost:4000|ready in"
+                }
+            }
         },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": ".*",
-          "endsPattern": "Backend running at http://localhost:4000|ready in"
+        {
+            "label": "build:npm",
+            "type": "shell",
+            "command": "npm run build"
+        },
+        {
+            "label": "build:pnpm",
+            "type": "shell",
+            "command": "pnpm run build:pnpm"
         }
-      }
-    },
-    {
-      "label": "build:npm",
-      "type": "shell",
-      "command": "npm run build"
-    },
-    {
-      "label": "build:pnpm",
-      "type": "shell",
-      "command": "pnpm run build:pnpm"
-    }
-  ]
+    ]
 }

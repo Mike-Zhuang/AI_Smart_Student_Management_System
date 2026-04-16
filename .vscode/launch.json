@@ -1,38 +1,48 @@
 {
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "Backend: Debug (TS + Watch)",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["--import", "tsx", "--watch", "src/server.ts"],
-      "cwd": "${workspaceFolder}/apps/backend",
-      "envFile": "${workspaceFolder}/apps/backend/.env",
-      "skipFiles": ["<node_internals>/**"],
-      "console": "integratedTerminal",
-      "internalConsoleOptions": "neverOpen"
-    },
-    {
-      "name": "Frontend: Dev Server (No Browser Auto Open)",
-      "type": "node-terminal",
-      "request": "launch",
-      "command": "npm run dev:frontend",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Frontend: Attach Chrome (Manual)",
-      "type": "pwa-chrome",
-      "request": "attach",
-      "port": 9222,
-      "webRoot": "${workspaceFolder}/apps/frontend/src"
-    }
-  ],
-  "compounds": [
-    {
-      "name": "Full Stack: Backend + Frontend (No Auto Browser)",
-      "configurations": ["Backend: Debug (TS + Watch)", "Frontend: Dev Server (No Browser Auto Open)"],
-      "stopAll": true
-    }
-  ]
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Backend: Debug (TS + Watch)",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "node",
+            "runtimeArgs": [
+                "--import",
+                "tsx",
+                "--watch",
+                "src/server.ts"
+            ],
+            "cwd": "${workspaceFolder}/apps/backend",
+            "envFile": "${workspaceFolder}/apps/backend/.env",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen"
+        },
+        {
+            "name": "Frontend: Dev Server (No Browser Auto Open)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "npm run dev:frontend",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Frontend: Attach Chrome (Manual)",
+            "type": "pwa-chrome",
+            "request": "attach",
+            "port": 9222,
+            "webRoot": "${workspaceFolder}/apps/frontend/src"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Full Stack: Backend + Frontend (No Auto Browser)",
+            "configurations": [
+                "Backend: Debug (TS + Watch)",
+                "Frontend: Dev Server (No Browser Auto Open)"
+            ],
+            "stopAll": true
+        }
+    ]
 }
