@@ -4,13 +4,14 @@ import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
 const NAV_ITEMS = [
-  { key: "overview", label: "总览" },
-  { key: "home-school", label: "家校沟通" },
-  { key: "career", label: "生涯选课" },
-  { key: "growth", label: "学业成长" },
-  { key: "teaching", label: "教研管理" },
-  { key: "ai-lab", label: "智谱模型" },
-  { key: "data-import", label: "数据导入" }
+  { key: "overview", label: "总览", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+  { key: "home-school", label: "家校沟通", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+  { key: "career", label: "生涯选课", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+  { key: "growth", label: "学业成长", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+  { key: "head-teacher", label: "班主任工作台", roles: ["admin", "head_teacher"] },
+  { key: "teaching", label: "教研管理", roles: ["admin", "teacher", "head_teacher"] },
+  { key: "ai-lab", label: "智谱模型", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+  { key: "data-import", label: "数据导入", roles: ["admin", "head_teacher"] }
 ];
 
 export const AppShell = ({
@@ -33,7 +34,7 @@ export const AppShell = ({
         </div>
 
         <nav className="nav-list">
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.filter((item) => item.roles.includes(user.role)).map((item) => (
             <NavLink
               key={item.key}
               to={`/dashboard/${item.key}`}

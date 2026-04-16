@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { downloadExport } from "../lib/export";
 
 type MessageItem = {
   id: number;
@@ -7,6 +8,7 @@ type MessageItem = {
   content: string;
   senderName: string;
   createdAt: string;
+  isRead: number;
 };
 
 type LeaveItem = {
@@ -70,6 +72,15 @@ export const HomeSchoolPanel = () => {
     }
   };
 
+  const markRead = async (id: number) => {
+    try {
+      await apiRequest(`/api/home-school/messages/${id}/read`, { method: "PATCH" });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "回执失败");
+    }
+  };
+
   return (
     <section className="panel-grid">
       <article className="panel-card wide">
@@ -107,11 +118,25 @@ export const HomeSchoolPanel = () => {
 
       <article className="panel-card wide">
         <h3>最新消息</h3>
+        <div className="inline-form">
+          <button
+            className="secondary-btn"
+            onClick={() => void downloadExport("/api/admin/export/module/messages", "messages")}
+          >
+            导出消息
+          </button>
+        </div>
         <div className="list-box">
           {messages.slice(0, 8).map((item) => (
             <div key={item.id} className="list-item">
               <strong>{item.title}</strong>
               <p>{item.content}</p>
+              <p>状态: {item.isRead ? "已读" : "未读"}</p>
+              {!item.isRead ? (
+                <button className="secondary-btn" onClick={() => void markRead(item.id)}>
+                  标记已读
+                </button>
+              ) : null}
               <small>
                 {item.senderName} · {new Date(item.createdAt).toLocaleString()}
               </small>
@@ -122,6 +147,14 @@ export const HomeSchoolPanel = () => {
 
       <article className="panel-card wide">
         <h3>请假审批</h3>
+        <div className="inline-form">
+          <button
+            className="secondary-btn"
+            onClick={() => void downloadExport("/api/admin/export/module/leave-requests", "leave-requests")}
+          >
+            导出请假记录
+          </button>
+        </div>
         <div className="table-scroll">
           <table>
             <thead>

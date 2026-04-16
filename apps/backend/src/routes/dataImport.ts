@@ -4,6 +4,8 @@ import { z } from "zod";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import type { AuthedRequest } from "../types.js";
+import { extractIp, logAudit } from "../utils/audit.js";
 
 const studentImportSchema = z.object({
   rows: z.array(
@@ -46,7 +48,7 @@ dataImportRouter.get("/templates", (_req, res) => {
   });
 });
 
-dataImportRouter.post("/students", (req, res) => {
+dataImportRouter.post("/students", (req: AuthedRequest, res) => {
   const parsed = studentImportSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ success: false, message: "学生导入数据格式错误" });
@@ -76,10 +78,21 @@ dataImportRouter.post("/students", (req, res) => {
     }
   }
 
+  if (req.user) {
+    logAudit({
+      userId: req.user.id,
+      actionModule: "data-import",
+      actionType: "import_students",
+      objectType: "students",
+      detail: { payloadSize: parsed.data.rows.length, imported },
+      ipAddress: extractIp(req)
+    });
+  }
+
   res.json({ success: true, message: "导入完成", data: { imported } });
 });
 
-dataImportRouter.post("/exam-results", (req, res) => {
+dataImportRouter.post("/exam-results", (req: AuthedRequest, res) => {
   const parsed = examImportSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ success: false, message: "成绩导入数据格式错误" });
@@ -101,6 +114,17 @@ dataImportRouter.post("/exam-results", (req, res) => {
 
     insert.run(student.id, row.subject, row.examName, row.examDate, row.score, dayjs().toISOString());
     imported += 1;
+  }
+
+  if (req.user) {
+    logAudit({
+      userId: req.user.id,
+      actionModule: "data-import",
+      actionType: "import_exam_results",
+      objectType: "exam_results",
+      detail: { payloadSize: parsed.data.rows.length, imported },
+      ipAddress: extractIp(req)
+    });
   }
 
   res.json({ success: true, message: "导入完成", data: { imported } });

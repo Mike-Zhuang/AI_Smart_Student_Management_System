@@ -5,12 +5,13 @@ import { AiLabPanel } from "../components/AiLabPanel";
 import { CareerPanel } from "../components/CareerPanel";
 import { DataImportPanel } from "../components/DataImportPanel";
 import { GrowthPanel } from "../components/GrowthPanel";
+import { HeadTeacherPanel } from "../components/HeadTeacherPanel";
 import { HomeSchoolPanel } from "../components/HomeSchoolPanel";
 import { OverviewPanel } from "../components/OverviewPanel";
 import { TeachingPanel } from "../components/TeachingPanel";
 import { useAuth } from "../App";
 
-const ALLOWED = ["overview", "home-school", "career", "growth", "teaching", "ai-lab", "data-import"];
+const ALLOWED = ["overview", "home-school", "career", "growth", "head-teacher", "teaching", "ai-lab", "data-import"];
 
 export const DashboardPage = () => {
   const { user, setUser } = useAuth();
@@ -25,6 +26,8 @@ export const DashboardPage = () => {
         return <CareerPanel />;
       case "growth":
         return <GrowthPanel user={user!} />;
+      case "head-teacher":
+        return <HeadTeacherPanel />;
       case "teaching":
         return <TeachingPanel />;
       case "ai-lab":

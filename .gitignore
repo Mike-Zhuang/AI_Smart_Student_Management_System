@@ -25,7 +25,6 @@ apps/backend/uploads/
 
 # OS / editor
 .DS_Store
-.vscode/settings.json
 .idea/
 *.swp
 *.swo

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { downloadExport } from "../lib/export";
 
 type Task = {
   id: number;
@@ -98,6 +99,13 @@ export const TeachingPanel = () => {
           </label>
           <button className="primary-btn" type="submit">
             新建任务
+          </button>
+          <button
+            className="secondary-btn"
+            type="button"
+            onClick={() => void downloadExport("/api/admin/export/module/teaching-tasks", "teaching-tasks")}
+          >
+            导出任务记录
           </button>
         </form>
       </article>

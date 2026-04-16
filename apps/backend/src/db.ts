@@ -160,6 +160,19 @@ const createSchema = (): void => {
       required_subjects TEXT NOT NULL,
       reference_score INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      action_module TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      object_type TEXT NOT NULL,
+      object_id INTEGER,
+      detail TEXT,
+      ip_address TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
   `);
 };
 

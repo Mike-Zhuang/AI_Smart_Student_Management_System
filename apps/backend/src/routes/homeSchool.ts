@@ -5,6 +5,7 @@ import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import type { AuthedRequest } from "../types.js";
+import { extractIp, logAudit } from "../utils/audit.js";
 
 const createMessageSchema = z.object({
   receiverUserId: z.number().int().positive().optional(),
@@ -40,6 +41,7 @@ homeSchoolRouter.get("/messages", requireAuth, (req: AuthedRequest, res) => {
     rows = db
       .prepare(
         `SELECT m.id, m.title, m.content, m.module, m.created_at as createdAt, m.receiver_role as receiverRole,
+          m.is_read as isRead,
                 sender.display_name as senderName
          FROM messages m
          LEFT JOIN users sender ON sender.id = m.sender_user_id
@@ -51,6 +53,7 @@ homeSchoolRouter.get("/messages", requireAuth, (req: AuthedRequest, res) => {
     rows = db
       .prepare(
         `SELECT m.id, m.title, m.content, m.module, m.created_at as createdAt, m.receiver_role as receiverRole,
+          m.is_read as isRead,
                 sender.display_name as senderName
          FROM messages m
          LEFT JOIN users sender ON sender.id = m.sender_user_id
@@ -81,9 +84,72 @@ homeSchoolRouter.post(
        VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
     ).run(req.user.id, input.receiverUserId ?? null, input.receiverRole ?? null, input.title, input.content, "home-school", dayjs().toISOString());
 
+    logAudit({
+      userId: req.user.id,
+      actionModule: "home-school",
+      actionType: "message_send",
+      objectType: "message",
+      detail: {
+        receiverUserId: input.receiverUserId ?? null,
+        receiverRole: input.receiverRole ?? null,
+        title: input.title
+      },
+      ipAddress: extractIp(req)
+    });
+
     res.json({ success: true, message: "消息已发送" });
   }
 );
+
+homeSchoolRouter.patch("/messages/:id/read", requireAuth, (req: AuthedRequest, res) => {
+  const messageId = Number(req.params.id);
+  if (Number.isNaN(messageId) || !req.user) {
+    res.status(400).json({ success: false, message: "参数不合法" });
+    return;
+  }
+
+  const message = db
+    .prepare(
+      `SELECT id, receiver_user_id as receiverUserId, receiver_role as receiverRole
+       FROM messages WHERE id = ?`
+    )
+    .get(messageId) as { id: number; receiverUserId: number | null; receiverRole: string | null } | undefined;
+
+  if (!message) {
+    res.status(404).json({ success: false, message: "消息不存在" });
+    return;
+  }
+
+  const canRead =
+    req.user.role === ROLES.ADMIN ||
+    message.receiverUserId === req.user.id ||
+    (message.receiverRole !== null && message.receiverRole === req.user.role);
+
+  if (!canRead) {
+    res.status(403).json({ success: false, message: "无权限操作" });
+    return;
+  }
+
+    db
+      .prepare(
+        `UPDATE messages
+         SET is_read = 1
+         WHERE id = ?
+          AND (receiver_user_id = ? OR receiver_role = ? OR ? = 'admin')`
+      )
+      .run(messageId, req.user.id, req.user.role, req.user.role);
+
+  logAudit({
+    userId: req.user.id,
+    actionModule: "home-school",
+    actionType: "message_read",
+    objectType: "message",
+    objectId: messageId,
+    ipAddress: extractIp(req)
+  });
+
+  res.json({ success: true, message: "已标记为已读" });
+});
 
 homeSchoolRouter.get("/leave-requests", requireAuth, (req: AuthedRequest, res) => {
   if (!req.user) {
@@ -131,6 +197,19 @@ homeSchoolRouter.post("/leave-requests", requireAuth, (req: AuthedRequest, res) 
      VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL, ?)`
   ).run(input.studentId, req.user.id, input.reason, input.startDate, input.endDate, dayjs().toISOString());
 
+  logAudit({
+    userId: req.user.id,
+    actionModule: "home-school",
+    actionType: "leave_submit",
+    objectType: "leave_request",
+    detail: {
+      studentId: input.studentId,
+      startDate: input.startDate,
+      endDate: input.endDate
+    },
+    ipAddress: extractIp(req)
+  });
+
   res.json({ success: true, message: "请假申请已提交" });
 });
 
@@ -151,6 +230,16 @@ homeSchoolRouter.patch(
        SET status = ?, review_note = ?, reviewed_by = ?
        WHERE id = ?`
     ).run(parsed.data.status, parsed.data.reviewNote, req.user.id, leaveId);
+
+    logAudit({
+      userId: req.user.id,
+      actionModule: "home-school",
+      actionType: "leave_review",
+      objectType: "leave_request",
+      objectId: leaveId,
+      detail: { status: parsed.data.status, reviewNote: parsed.data.reviewNote },
+      ipAddress: extractIp(req)
+    });
 
     res.json({ success: true, message: "审核完成" });
   }

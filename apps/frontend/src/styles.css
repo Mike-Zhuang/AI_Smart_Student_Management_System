@@ -299,6 +299,45 @@ textarea:focus {
   margin: 6px 0;
 }
 
+.explain-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.score-item {
+  border: 1px solid var(--border-warm);
+  border-radius: var(--radius-sm);
+  background: white;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.score-item-brand {
+  background: rgba(201, 100, 66, 0.08);
+  border-color: rgba(201, 100, 66, 0.3);
+}
+
+.funnel-list {
+  display: grid;
+  gap: 8px;
+}
+
+.funnel-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-warm);
+  background: white;
+}
+
 .table-scroll {
   overflow: auto;
 }

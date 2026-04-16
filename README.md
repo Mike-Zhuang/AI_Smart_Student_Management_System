@@ -70,17 +70,22 @@
 
 - Node.js >= 20
 - npm >= 10
+- pnpm >= 9（可选）
 
 ### 安装依赖
 
 ```bash
 npm install
+# 或
+pnpm install
 ```
 
 ### 启动开发环境
 
 ```bash
 npm run dev
+# 或
+pnpm dev
 ```
 
 默认地址：
@@ -93,7 +98,26 @@ npm run dev
 ```bash
 npm run dev:backend
 npm run dev:frontend
+# 或
+pnpm dev:backend
+pnpm dev:frontend
 ```
+
+### 构建
+
+```bash
+npm run build
+# 或
+pnpm build
+```
+
+### VS Code 本地全栈调试
+
+项目已提供 `.vscode` 调试配置，可直接在 VS Code 里启动前后端调试链路：
+
+- `Full Stack Debug`：同时启动后端与前端开发服务
+- `Debug Backend Only`：仅调试后端 API
+- `Debug Frontend (Manual Browser)`：手动打开浏览器后附加调试（不自动拉起浏览器）
 
 ## 5. 演示账号
 
@@ -109,13 +133,16 @@ npm run dev:frontend
 
 - 消息中心与通知推送
 - 请假申请与审批闭环
-- 家长消息反馈
+- 家长消息反馈与回执追踪（已读标记）
+- 支持消息/请假记录导出
 
 ### 6.2 生涯规划与选课
 
 - 选科推荐生成（3+1+2）
 - 公开专业选科要求查询
 - 推荐历史追踪
+- 推荐理由可解释（维度分、证据链、反事实）
+- 推荐记录导出
 
 ### 6.3 学业成长追踪
 
@@ -128,6 +155,14 @@ npm run dev:frontend
 - 教学任务管理
 - 教研成果归集
 - 绩效分析可视化
+- 班主任工作台（待办漏斗、回执率、风险学生）
+- 审计日志与评比证据包导出
+
+### 6.5 智谱模型实验室
+
+- 模型切换调用
+- 预置提示词模板（按场景筛选）
+- 模板变量 JSON 填充与模板化调用
 
 ## 7. 数据策略
 
@@ -149,6 +184,13 @@ npm run dev:frontend
 
 - /api/data-import/students
 - /api/data-import/exam-results
+
+导出与审计接口：
+
+- /api/admin/audit-logs
+- /api/admin/export/audit-logs
+- /api/admin/export/module/:module
+- /api/admin/export/evidence-report
 
 ## 8. 裸机部署
 
@@ -173,6 +215,9 @@ npm run dev:frontend
 - GUIDE.md：前端功能详细使用说明与实现路径
 - DESIGN.md：前端视觉设计规范
 - official_doc/附件3：创AI案例征集指南.md：评比要求来源
+- docs/defense-demo-script.md：8分钟答辩脚本与操作清单
+- docs/evaluation-checklist.md：评比条目核对清单
+- docs/ai-generated-content-policy.md：AI内容标识规范
 
 ## 11. 许可证
 

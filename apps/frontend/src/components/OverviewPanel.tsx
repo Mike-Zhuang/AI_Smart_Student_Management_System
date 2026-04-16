@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { downloadExport } from "../lib/export";
 import type { User } from "../lib/types";
 
 type OverviewData = {
@@ -50,6 +51,22 @@ export const OverviewPanel = ({ user }: { user: User }) => {
           这是面向中国大陆高中场景的一体化管理辅助系统，覆盖家校沟通、生涯规划选课、学生学业成长追踪与教师教研管理四大模块，
           支持智谱模型接入与账号分级权限。
         </p>
+        {user.role === "admin" ? (
+          <div className="inline-form">
+            <button
+              className="secondary-btn"
+              onClick={() => void downloadExport("/api/admin/audit-logs", "audit-logs")}
+            >
+              导出审计日志
+            </button>
+            <button
+              className="secondary-btn"
+              onClick={() => void downloadExport("/api/admin/export/evidence-report", "evaluation-evidence", "json")}
+            >
+              导出评比证据包
+            </button>
+          </div>
+        ) : null}
       </article>
 
       <article className="panel-card">

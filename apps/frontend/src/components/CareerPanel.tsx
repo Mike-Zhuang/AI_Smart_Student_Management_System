@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { downloadExport } from "../lib/export";
 
 type Student = {
   id: number;
@@ -15,7 +16,19 @@ type Recommendation = {
   selectedCombination: string;
   reasoning: string;
   majorSuggestions: string;
+  scoreBreakdown: string;
   createdAt: string;
+};
+
+type ScoreBreakdown = {
+  science: number;
+  social: number;
+  logic: number;
+  language: number;
+  stability: number;
+  confidence?: number;
+  counterfactual?: string;
+  evidenceChain?: Array<{ dimension: string; evidence: string; impact: string }>;
 };
 
 type MajorRow = {
@@ -32,6 +45,14 @@ export const CareerPanel = () => {
   const [majors, setMajors] = useState<MajorRow[]>([]);
   const [model, setModel] = useState("glm-4.7-flash");
   const [error, setError] = useState("");
+
+  const parseBreakdown = (raw: string): ScoreBreakdown | null => {
+    try {
+      return JSON.parse(raw) as ScoreBreakdown;
+    } catch {
+      return null;
+    }
+  };
 
   const loadStudents = async () => {
     const response = await apiRequest<Student[]>("/api/students");
@@ -113,6 +134,12 @@ export const CareerPanel = () => {
           <button className="primary-btn" onClick={generate}>
             生成选课建议
           </button>
+          <button
+            className="secondary-btn"
+            onClick={() => void downloadExport("/api/admin/export/module/career-recommendations", "career-recommendations")}
+          >
+            导出推荐记录
+          </button>
         </div>
       </article>
 
@@ -128,6 +155,71 @@ export const CareerPanel = () => {
             </div>
           ))}
         </div>
+      </article>
+
+      <article className="panel-card wide">
+        <h4>理由可解释面板</h4>
+        {recommendations.length > 0 ? (
+          (() => {
+            const latest = recommendations[0];
+            const breakdown = parseBreakdown(latest.scoreBreakdown);
+
+            if (!breakdown) {
+              return <p>当前推荐记录不含结构化解释数据。</p>;
+            }
+
+            return (
+              <div className="explain-grid">
+                <div className="score-grid">
+                  <div className="score-item">
+                    <span>science</span>
+                    <strong>{breakdown.science}</strong>
+                  </div>
+                  <div className="score-item">
+                    <span>social</span>
+                    <strong>{breakdown.social}</strong>
+                  </div>
+                  <div className="score-item">
+                    <span>logic</span>
+                    <strong>{breakdown.logic}</strong>
+                  </div>
+                  <div className="score-item">
+                    <span>language</span>
+                    <strong>{breakdown.language}</strong>
+                  </div>
+                  <div className="score-item">
+                    <span>stability</span>
+                    <strong>{breakdown.stability}</strong>
+                  </div>
+                  <div className="score-item score-item-brand">
+                    <span>confidence</span>
+                    <strong>{breakdown.confidence ?? "--"}</strong>
+                  </div>
+                </div>
+
+                <div>
+                  <h5>证据链</h5>
+                  <div className="list-box compact">
+                    {(breakdown.evidenceChain ?? []).map((item, index) => (
+                      <div className="list-item" key={`${item.dimension}-${index}`}>
+                        <strong>{item.dimension}</strong>
+                        <p>{item.evidence}</p>
+                        <small>{item.impact}</small>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <h5>反事实说明</h5>
+                  <p>{breakdown.counterfactual ?? "暂无"}</p>
+                </div>
+              </div>
+            );
+          })()
+        ) : (
+          <p>请先生成一条选课建议。</p>
+        )}
       </article>
 
       <article className="panel-card wide">

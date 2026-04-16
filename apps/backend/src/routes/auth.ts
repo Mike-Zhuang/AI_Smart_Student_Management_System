@@ -5,6 +5,7 @@ import { db } from "../db.js";
 import { ROLES } from "../constants.js";
 import { comparePassword, hashPassword, signToken } from "../utils/auth.js";
 import type { AuthUser } from "../types.js";
+import { extractIp, logAudit } from "../utils/audit.js";
 
 const loginSchema = z.object({
   username: z.string().min(3),
@@ -58,6 +59,17 @@ authRouter.post("/login", (req, res) => {
   };
 
   const token = signToken(payload);
+
+  logAudit({
+    userId: payload.id,
+    actionModule: "auth",
+    actionType: "login",
+    objectType: "user",
+    objectId: payload.id,
+    detail: { username: payload.username, role: payload.role },
+    ipAddress: extractIp(req)
+  });
+
   res.json({ success: true, message: "登录成功", data: { token, user: payload } });
 });
 
@@ -133,6 +145,17 @@ authRouter.post("/register", (req, res) => {
   };
 
   const token = signToken(payload);
+
+  logAudit({
+    userId: payload.id,
+    actionModule: "auth",
+    actionType: "register",
+    objectType: "user",
+    objectId: payload.id,
+    detail: { username: payload.username, role: payload.role, inviteCode: parsed.data.inviteCode },
+    ipAddress: extractIp(req)
+  });
+
   res.json({ success: true, message: "注册成功", data: { token, user: payload } });
 });
 

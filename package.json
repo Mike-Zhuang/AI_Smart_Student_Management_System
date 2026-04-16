@@ -2,15 +2,25 @@
   "name": "management-assistant-system",
   "private": true,
   "version": "1.0.0",
+  "packageManager": "npm@10.9.0",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10",
+    "pnpm": ">=8"
+  },
   "workspaces": [
     "apps/backend",
     "apps/frontend"
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w @ms/backend\" \"npm run dev -w @ms/frontend\"",
+    "dev:pnpm": "concurrently \"pnpm --filter @ms/backend dev\" \"pnpm --filter @ms/frontend dev\"",
     "dev:backend": "npm run dev -w @ms/backend",
+    "dev:backend:pnpm": "pnpm --filter @ms/backend dev",
     "dev:frontend": "npm run dev -w @ms/frontend",
-    "build": "npm run build -w @ms/backend && npm run build -w @ms/frontend"
+    "dev:frontend:pnpm": "pnpm --filter @ms/frontend dev",
+    "build": "npm run build -w @ms/backend && npm run build -w @ms/frontend",
+    "build:pnpm": "pnpm --filter @ms/backend build && pnpm --filter @ms/frontend build"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

@@ -26,9 +26,10 @@
 2. 家校沟通
 3. 生涯选课
 4. 学业成长
-5. 教研管理
-6. 智谱模型
-7. 数据导入
+5. 班主任工作台（管理员/班主任）
+6. 教研管理
+7. 智谱模型
+8. 数据导入
 
 ## 3. 模块详解
 
@@ -41,6 +42,7 @@
 - 展示当前角色
 - 展示学生规模
 - 管理员可查看账号角色分布与消息总量
+- 管理员可导出审计日志与评比证据包
 
 实现来源：
 
@@ -60,10 +62,15 @@
 2. 消息查看
 - 按角色权限查看最新消息
 - 显示发送人和发送时间
+- 支持“标记已读”形成回执闭环
 
 3. 请假审批
 - 查看请假记录
 - 执行同意/驳回
+
+4. 导出取证
+- 导出消息记录
+- 导出请假记录
 
 实现来源：
 
@@ -71,6 +78,9 @@
 - `POST /api/home-school/messages`
 - `GET /api/home-school/leave-requests`
 - `PATCH /api/home-school/leave-requests/:id/review`
+- `PATCH /api/home-school/messages/:id/read`
+- `GET /api/admin/export/module/messages`
+- `GET /api/admin/export/module/leave-requests`
 
 ## 3.3 生涯规划与选课
 
@@ -82,7 +92,9 @@
 2. 选模型（智谱）
 3. 点击生成建议
 4. 查看推荐历史
-5. 查看公开专业选科要求表
+5. 查看推荐理由可解释面板（维度分、证据链、反事实）
+6. 查看公开专业选科要求表
+7. 导出推荐记录
 
 实现来源：
 
@@ -90,6 +102,7 @@
 - `POST /api/career/recommendations/generate`
 - `GET /api/career/recommendations/:studentId`
 - `GET /api/career/public-data/major-requirements`
+- `GET /api/admin/export/module/career-recommendations`
 
 ## 3.4 学业成长追踪
 
@@ -118,6 +131,7 @@
 2. 任务列表
 3. 教研成果表
 4. 统计卡片（状态统计、平均绩效）
+5. 任务记录导出
 
 实现来源：
 
@@ -125,8 +139,26 @@
 - `POST /api/teaching/tasks`
 - `GET /api/teaching/research`
 - `GET /api/teaching/analytics`
+- `GET /api/admin/export/module/teaching-tasks`
 
-## 3.6 智谱模型实验室
+## 3.6 班主任工作台
+
+目标：给班主任提供日常管理的细颗粒决策视图。
+
+功能：
+
+1. 班级筛选
+2. 待办漏斗（请假待审/预警待跟进/教学待办/家长待回执）
+3. 风险学生清单
+4. 最近审计轨迹
+5. 导出评比证据包
+
+实现来源：
+
+- `GET /api/teaching/head-teacher/workbench`
+- `GET /api/admin/export/evidence-report`
+
+## 3.7 智谱模型实验室
 
 目标：提供统一模型切换与调用体验。
 
@@ -137,20 +169,23 @@
 - GLM-4.7-Flash（文本思考）
 - GLM-4.1V-Thinking-Flash（多模态思考）
 - GLM-4.6V-Flash（多模态快速）
-3. 输入提示词
-4. 查看模型输出
+3. 选择业务场景模板（生涯/成长/家校/教研）
+4. 填写模板变量 JSON 或自定义提示词
+5. 查看模型输出
 
 实现来源：
 
 - `GET /api/ai/models`
 - `POST /api/ai/chat`
+- `GET /api/ai/prompt-templates`
+- `POST /api/ai/chat-with-template`
 
 说明：
 
 - API Key 不在后端持久化，仅调用时透传。
 - 若请求多模态输入但模型不支持，后端会拒绝并提示。
 
-## 3.7 数据导入
+## 3.8 数据导入
 
 目标：为后期替换真实学校数据提供标准入口。
 
@@ -187,11 +222,11 @@
 
 ## 5. 演示脚本建议（8分钟）
 
-1. 1分钟：总览 + 角色切换
-2. 2分钟：家校沟通（发通知 + 请假审核）
-3. 2分钟：生涯选课（生成推荐 + 专业映射）
-4. 2分钟：学业成长（趋势图 + 风险预警）
-5. 1分钟：教研管理 + 智谱模型切换
+详见 `docs/defense-demo-script.md`，该文档包含：
+
+1. 分秒级答辩讲稿
+2. 可直接照做的操作路径
+3. 评比证据导出清单
 
 ## 6. 评比注意事项
 
