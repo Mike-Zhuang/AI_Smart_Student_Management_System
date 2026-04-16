@@ -21,15 +21,15 @@ export const DashboardPage = () => {
     const content = useMemo(() => {
         switch (section) {
             case "home-school":
-                return <HomeSchoolPanel />;
+                return <HomeSchoolPanel user={user!} />;
             case "career":
-                return <CareerPanel />;
+                return <CareerPanel user={user!} />;
             case "growth":
                 return <GrowthPanel user={user!} />;
             case "head-teacher":
                 return <HeadTeacherPanel />;
             case "teaching":
-                return <TeachingPanel />;
+                return <TeachingPanel user={user!} />;
             case "ai-lab":
                 return <AiLabPanel />;
             case "data-import":

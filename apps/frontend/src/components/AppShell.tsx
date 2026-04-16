@@ -10,7 +10,7 @@ const NAV_ITEMS = [
     { key: "growth", label: "学业成长", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "head-teacher", label: "班主任工作台", roles: ["admin", "head_teacher"] },
     { key: "teaching", label: "教研管理", roles: ["admin", "teacher", "head_teacher"] },
-    { key: "ai-lab", label: "智谱模型", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+    { key: "ai-lab", label: "AI助手中心", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "data-import", label: "数据导入", roles: ["admin", "head_teacher"] }
 ];
 

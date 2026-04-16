@@ -1,5 +1,7 @@
 import { Router } from "express";
 import dayjs from "dayjs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { z } from "zod";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
@@ -35,6 +37,10 @@ const examImportSchema = z.object({
 
 export const dataImportRouter = Router();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const templateDir = path.resolve(__dirname, "../../templates");
+
 dataImportRouter.use(requireAuth, requireRole(ROLES.ADMIN, ROLES.HEAD_TEACHER));
 
 dataImportRouter.get("/templates", (_req, res) => {
@@ -43,7 +49,29 @@ dataImportRouter.get("/templates", (_req, res) => {
         message: "模板字段",
         data: {
             students: ["studentNo", "name", "grade", "className", "subjectCombination", "interests", "careerGoal"],
-            examResults: ["studentNo", "examName", "examDate", "subject", "score"]
+            examResults: ["studentNo", "examName", "examDate", "subject", "score"],
+            teachers: ["teacherUsername", "className", "isHeadTeacher"]
+        }
+    });
+});
+
+dataImportRouter.get("/template-files/:type", (req, res) => {
+    const type = req.params.type;
+    const map: Record<string, string> = {
+        students: "students-template.csv",
+        "exam-results": "exam-results-template.csv",
+        teachers: "teachers-template.csv"
+    };
+
+    const filename = map[type];
+    if (!filename) {
+        res.status(400).json({ success: false, message: "不支持的模板类型" });
+        return;
+    }
+
+    res.download(path.join(templateDir, filename), filename, (error) => {
+        if (error) {
+            res.status(404).json({ success: false, message: "模板文件不存在" });
         }
     });
 });

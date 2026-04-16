@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiRequest } from "../lib/api";
+import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
 type Student = {
@@ -42,6 +43,8 @@ export const GrowthPanel = ({ user }: { user: User }) => {
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [trends, setTrends] = useState<Trend[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [apiKey, setApiKey] = useState(storage.getApiKey());
+  const [aiSummary, setAiSummary] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -104,14 +107,48 @@ export const GrowthPanel = ({ user }: { user: User }) => {
         <div className="inline-form">
           <label>
             选择学生
-            <select value={studentId ?? ""} onChange={(event) => setStudentId(Number(event.target.value))}>
+            <select
+              value={studentId ?? ""}
+              onChange={(event) => setStudentId(Number(event.target.value))}
+              disabled={students.length <= 1 && (user.role === "parent" || user.role === "student")}
+            >
               {students.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name} · {item.grade} · {item.className}
+                  {item.name} / {item.grade} / {item.className}
                 </option>
               ))}
             </select>
           </label>
+          <label>
+            AI Key（用于风险诊断）
+            <input
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder="请输入可用的 API Key"
+            />
+          </label>
+          <button
+            className="secondary-btn"
+            onClick={async () => {
+              if (!studentId || !apiKey.trim()) {
+                setError("请先选择学生并填写 API Key");
+                return;
+              }
+
+              try {
+                storage.setApiKey(apiKey.trim());
+                const response = await apiRequest<{ answer: string }>(`/api/growth/students/${studentId}/ai-diagnosis`, {
+                  method: "POST",
+                  body: JSON.stringify({ apiKey: apiKey.trim(), model: "glm-4.7-flash" })
+                });
+                setAiSummary(response.data.answer);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "AI诊断失败");
+              }
+            }}
+          >
+            AI风险诊断
+          </button>
         </div>
       </article>
 
@@ -149,6 +186,13 @@ export const GrowthPanel = ({ user }: { user: User }) => {
           </ResponsiveContainer>
         </div>
       </article>
+
+      {aiSummary ? (
+        <article className="panel-card wide">
+          <h4>AI 诊断结果</h4>
+          <pre className="answer-box">{aiSummary}</pre>
+        </article>
+      ) : null}
 
       {error ? <p className="error-text">{error}</p> : null}
     </section>

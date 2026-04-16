@@ -58,3 +58,25 @@
 	- 更新 `README.md` 与 `GUIDE.md`，同步记录新能力与接口。
 - 验证结果：
 	- 执行 `npm run build`，后端 TypeScript 与前端 Vite 构建通过。
+
+## 2026-04-16 21:23:42 +0800
+
+- 后端 AI 与权限能力强化：
+	- `apps/backend/src/services/zhipu.ts` 支持 `systemPrompt`，统一采用 system+user 消息结构。
+	- `apps/backend/src/config/promptTemplates.ts` 增加模板系统指令与变量元信息，覆盖生涯/成长/家校/教研场景。
+	- `apps/backend/src/routes/ai.ts` 增加模板变量缺失校验并透传 `systemPrompt`。
+	- `apps/backend/src/routes/career.ts` 生涯推荐改为必须真实 AI 生成（无 API Key 不可调用），并加入结构化结果解析。
+	- `apps/backend/src/middleware/auth.ts` 与 `apps/backend/src/routes/students.ts` 基于 `parent_student_links`、`teacher_class_links` 落实按关系的数据访问控制。
+	- `apps/backend/src/routes/homeSchool.ts`、`apps/backend/src/routes/growth.ts`、`apps/backend/src/routes/teaching.ts` 分别新增 AI 回复草稿、AI 诊断、AI 执行计划接口。
+- 后端数据与导入能力扩展：
+	- `apps/backend/src/db.ts` 新增关系表并重构 seed，扩充到约 1000 学生规模，完善家长一对多绑定与考试波动趋势数据。
+	- `apps/backend/src/routes/dataImport.ts` 新增模板文件下载接口，支持 students/exam-results/teachers。
+	- 新增 `apps/backend/templates/teachers-template.csv` 教师班级映射模板。
+- 前端交互与角色体验优化：
+	- `apps/frontend/src/components/AiLabPanel.tsx` 改为表单化变量输入，支持 API Key 快速复用及图片/文档 URL 多模态输入。
+	- `apps/frontend/src/components/CareerPanel.tsx`、`apps/frontend/src/components/GrowthPanel.tsx`、`apps/frontend/src/components/HomeSchoolPanel.tsx`、`apps/frontend/src/components/TeachingPanel.tsx` 增加真实 AI 操作入口并按角色收敛可见能力。
+	- `apps/frontend/src/components/DataImportPanel.tsx` 增加三类模板一键下载按钮。
+	- `apps/frontend/src/components/AppShell.tsx` 导航命名调整为“AI助手中心”。
+	- `apps/frontend/src/lib/export.ts` 新增通用鉴权文件下载工具 `downloadFile`。
+- 验证结果：
+	- 执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）通过。

@@ -16,6 +16,7 @@ export type ChatPayload = {
   prompt: string;
   multimodal?: MultiModalItem[];
   enableThinking?: boolean;
+  systemPrompt?: string;
 };
 
 export const callZhipu = async (payload: ChatPayload): Promise<string> => {
@@ -23,11 +24,15 @@ export const callZhipu = async (payload: ChatPayload): Promise<string> => {
     ? [...payload.multimodal, { type: "text", text: payload.prompt }]
     : payload.prompt;
 
+  const messages = payload.systemPrompt
+    ? [{ role: "system", content: payload.systemPrompt }, { role: "user", content }]
+    : [{ role: "user", content }];
+
   const response = await axios.post(
     ZHIPU_ENDPOINT,
     {
       model: payload.model,
-      messages: [{ role: "user", content }],
+      messages,
       thinking: payload.enableThinking ? { type: "enabled" } : undefined,
       max_tokens: 2048,
       temperature: 0.7

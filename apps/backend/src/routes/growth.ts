@@ -1,9 +1,18 @@
 import { Router } from "express";
+import { z } from "zod";
+import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
 import { db } from "../db.js";
 import { requireAuth, canAccessStudent } from "../middleware/auth.js";
+import { callZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
+import { extractIp, logAudit } from "../utils/audit.js";
 
 export const growthRouter = Router();
+
+const aiDiagnosisSchema = z.object({
+  apiKey: z.string().min(10),
+  model: z.string().min(3)
+});
 
 growthRouter.get("/students/:studentId/profile", requireAuth, (req: AuthedRequest, res) => {
   const studentId = Number(req.params.studentId);
@@ -82,4 +91,101 @@ growthRouter.get("/students/:studentId/alerts", requireAuth, (req: AuthedRequest
     .all(studentId);
 
   res.json({ success: true, message: "查询成功", data: rows });
+});
+
+growthRouter.post("/students/:studentId/ai-diagnosis", requireAuth, async (req: AuthedRequest, res) => {
+  const studentId = Number(req.params.studentId);
+  const parsed = aiDiagnosisSchema.safeParse(req.body);
+  if (Number.isNaN(studentId) || !parsed.success || !req.user) {
+    res.status(400).json({ success: false, message: "参数不合法" });
+    return;
+  }
+
+  if (!canAccessStudent(req, studentId)) {
+    res.status(403).json({ success: false, message: "无权分析该学生" });
+    return;
+  }
+
+  const template = getTemplateById("growth-risk-v1");
+  if (!template) {
+    res.status(500).json({ success: false, message: "系统未配置成长诊断模板" });
+    return;
+  }
+
+  const student = db
+    .prepare(
+      `SELECT id, name, grade, class_name as className, interests, career_goal as careerGoal
+       FROM students WHERE id = ?`
+    )
+    .get(studentId) as
+    | { id: number; name: string; grade: string; className: string; interests: string | null; careerGoal: string | null }
+    | undefined;
+
+  if (!student) {
+    res.status(404).json({ success: false, message: "学生不存在" });
+    return;
+  }
+
+  const trends = db
+    .prepare(
+      `SELECT exam_name as examName, ROUND(AVG(score), 1) as avgScore
+       FROM exam_results
+       WHERE student_id = ?
+       GROUP BY exam_name
+       ORDER BY exam_date ASC`
+    )
+    .all(studentId) as Array<{ examName: string; avgScore: number }>;
+
+  const alerts = db
+    .prepare(
+      `SELECT alert_type as alertType, content, status
+       FROM alerts
+       WHERE student_id = ?
+       ORDER BY created_at DESC
+       LIMIT 6`
+    )
+    .all(studentId) as Array<{ alertType: string; content: string; status: string }>;
+
+  const studentData = [
+    `姓名: ${student.name}`,
+    `班级: ${student.grade} ${student.className}`,
+    `兴趣: ${student.interests ?? "暂无"}`,
+    `目标: ${student.careerGoal ?? "暂无"}`,
+    `趋势: ${trends.map((item) => `${item.examName}:${item.avgScore}`).join("; ") || "暂无"}`,
+    `预警: ${alerts.map((item) => `${item.alertType}-${item.content}-${item.status}`).join("; ") || "暂无"}`
+  ].join("\n");
+
+  const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
+
+  try {
+    const answer = await callZhipu({
+      apiKey: parsed.data.apiKey,
+      model: parsed.data.model,
+      prompt,
+      systemPrompt: template.systemPrompt,
+      enableThinking: parsed.data.model.includes("thinking") || parsed.data.model === "glm-4.7-flash"
+    });
+
+    logAudit({
+      userId: req.user.id,
+      actionModule: "growth",
+      actionType: "ai_diagnosis",
+      objectType: "student",
+      objectId: studentId,
+      detail: { model: parsed.data.model },
+      ipAddress: extractIp(req)
+    });
+
+    res.json({
+      success: true,
+      message: "分析完成",
+      data: {
+        studentId,
+        answer
+      }
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "未知错误";
+    res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });
+  }
 });

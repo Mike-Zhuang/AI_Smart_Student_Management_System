@@ -1,9 +1,11 @@
 import { Router } from "express";
 import dayjs from "dayjs";
 import { z } from "zod";
+import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { callZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 
@@ -11,6 +13,11 @@ const createTaskSchema = z.object({
     title: z.string().min(2),
     taskType: z.enum(["lesson_plan", "research", "communication", "training"]),
     dueDate: z.string().min(8)
+});
+
+const aiTaskSchema = z.object({
+    apiKey: z.string().min(10),
+    model: z.string().min(3)
 });
 
 export const teachingRouter = Router();
@@ -45,6 +52,92 @@ teachingRouter.get(
                 .all(req.user.id);
 
         res.json({ success: true, message: "查询成功", data: rows });
+    }
+);
+
+teachingRouter.post(
+    "/tasks/:id/ai-plan",
+    requireAuth,
+    requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER),
+    async (req: AuthedRequest, res) => {
+        const taskId = Number(req.params.id);
+        const parsed = aiTaskSchema.safeParse(req.body);
+        if (Number.isNaN(taskId) || !parsed.success || !req.user) {
+            res.status(400).json({ success: false, message: "参数不合法" });
+            return;
+        }
+
+        const task = db
+            .prepare(
+                `SELECT t.id, t.title, t.task_type as taskType, t.status, t.due_date as dueDate,
+                        u.display_name as teacherName
+                 FROM teaching_tasks t
+                 JOIN users u ON u.id = t.teacher_user_id
+                 WHERE t.id = ?`
+            )
+            .get(taskId) as
+            | {
+                id: number;
+                title: string;
+                taskType: string;
+                status: string;
+                dueDate: string;
+                teacherName: string;
+            }
+            | undefined;
+
+        if (!task) {
+            res.status(404).json({ success: false, message: "任务不存在" });
+            return;
+        }
+
+        const template = getTemplateById("teaching-research-v1");
+        if (!template) {
+            res.status(500).json({ success: false, message: "系统未配置教研模板" });
+            return;
+        }
+
+        const taskData = [
+            `任务标题: ${task.title}`,
+            `任务类型: ${task.taskType}`,
+            `当前状态: ${task.status}`,
+            `截止日期: ${task.dueDate}`,
+            `负责人: ${task.teacherName}`
+        ].join("\n");
+
+        const prompt = `${fillTemplate(template.template, { taskData })}\n\n输出规范:\n${template.outputSpec}`;
+
+        try {
+            const answer = await callZhipu({
+                apiKey: parsed.data.apiKey,
+                model: parsed.data.model,
+                prompt,
+                systemPrompt: template.systemPrompt,
+                enableThinking: parsed.data.model.includes("thinking") || parsed.data.model === "glm-4.7-flash"
+            });
+
+            logAudit({
+                userId: req.user.id,
+                actionModule: "teaching",
+                actionType: "ai_task_plan",
+                objectType: "teaching_task",
+                objectId: taskId,
+                detail: { model: parsed.data.model },
+                ipAddress: extractIp(req)
+            });
+
+            res.json({
+                success: true,
+                message: "生成成功",
+                data: {
+                    taskId,
+                    answer
+                }
+            });
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : "未知错误";
+            res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });
+        }
     }
 );
 

@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { downloadExport } from "../lib/export";
+import { storage } from "../lib/storage";
+import type { User } from "../lib/types";
 
 type MessageItem = {
     id: number;
@@ -22,11 +24,13 @@ type LeaveItem = {
     reviewNote: string;
 };
 
-export const HomeSchoolPanel = () => {
+export const HomeSchoolPanel = ({ user }: { user: User }) => {
     const [messages, setMessages] = useState<MessageItem[]>([]);
     const [leaves, setLeaves] = useState<LeaveItem[]>([]);
     const [error, setError] = useState("");
     const [form, setForm] = useState({ receiverRole: "parent", title: "", content: "" });
+    const [apiKey, setApiKey] = useState(storage.getApiKey());
+    const [draftMap, setDraftMap] = useState<Record<number, string>>({});
 
     const load = async () => {
         try {
@@ -81,44 +85,69 @@ export const HomeSchoolPanel = () => {
         }
     };
 
+    const generateDraft = async (id: number) => {
+        if (!apiKey.trim()) {
+            setError("请先填写 API Key 才能生成 AI 回复草稿");
+            return;
+        }
+
+        try {
+            storage.setApiKey(apiKey.trim());
+            const response = await apiRequest<{ draft: string }>(`/api/home-school/messages/${id}/ai-reply-draft`, {
+                method: "POST",
+                body: JSON.stringify({ apiKey: apiKey.trim(), model: "glm-4.7-flash" })
+            });
+            setDraftMap((prev) => ({ ...prev, [id]: response.data.draft }));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "生成草稿失败");
+        }
+    };
+
     return (
         <section className="panel-grid">
-            <article className="panel-card wide">
-                <h3>家校消息发送</h3>
-                <form onSubmit={onSend} className="inline-form">
-                    <label>
-                        角色
-                        <select
-                            value={form.receiverRole}
-                            onChange={(event) => setForm({ ...form, receiverRole: event.target.value })}
-                        >
-                            <option value="parent">家长</option>
-                            <option value="student">学生</option>
-                            <option value="teacher">教师</option>
-                            <option value="head_teacher">班主任</option>
-                        </select>
-                    </label>
-                    <label>
-                        标题
-                        <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required />
-                    </label>
-                    <label>
-                        内容
-                        <input
-                            value={form.content}
-                            onChange={(event) => setForm({ ...form, content: event.target.value })}
-                            required
-                        />
-                    </label>
-                    <button className="primary-btn" type="submit">
-                        发送
-                    </button>
-                </form>
-            </article>
+            {user.role === "admin" || user.role === "teacher" || user.role === "head_teacher" ? (
+                <article className="panel-card wide">
+                    <h3>家校消息发送</h3>
+                    <form onSubmit={onSend} className="inline-form">
+                        <label>
+                            角色
+                            <select
+                                value={form.receiverRole}
+                                onChange={(event) => setForm({ ...form, receiverRole: event.target.value })}
+                            >
+                                <option value="parent">家长</option>
+                                <option value="student">学生</option>
+                                <option value="teacher">教师</option>
+                                <option value="head_teacher">班主任</option>
+                            </select>
+                        </label>
+                        <label>
+                            标题
+                            <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required />
+                        </label>
+                        <label>
+                            内容
+                            <input
+                                value={form.content}
+                                onChange={(event) => setForm({ ...form, content: event.target.value })}
+                                required
+                            />
+                        </label>
+                        <button className="primary-btn" type="submit">
+                            发送
+                        </button>
+                    </form>
+                </article>
+            ) : (
+                <article className="panel-card wide">
+                    <h3>家校消息中心</h3>
+                    <p>当前身份可查看通知与请假状态，不支持主动群发消息。</p>
+                </article>
+            )}
 
             <article className="panel-card wide">
                 <h3>最新消息</h3>
-                <div className="inline-form">
+                <div className="inline-form section-actions">
                     <button
                         className="secondary-btn"
                         onClick={() => void downloadExport("/api/admin/export/module/messages", "messages")}
@@ -137,6 +166,19 @@ export const HomeSchoolPanel = () => {
                                     标记已读
                                 </button>
                             ) : null}
+                            {(user.role === "admin" || user.role === "teacher" || user.role === "head_teacher") ? (
+                                <div className="inline-form section-actions compact-actions">
+                                    <input
+                                        value={apiKey}
+                                        placeholder="API Key（用于生成回复草稿）"
+                                        onChange={(event) => setApiKey(event.target.value)}
+                                    />
+                                    <button className="secondary-btn" onClick={() => void generateDraft(item.id)}>
+                                        AI生成回复草稿
+                                    </button>
+                                </div>
+                            ) : null}
+                            {draftMap[item.id] ? <p className="ai-draft">AI草稿: {draftMap[item.id]}</p> : null}
                             <small>
                                 {item.senderName} · {new Date(item.createdAt).toLocaleString()}
                             </small>
@@ -147,7 +189,7 @@ export const HomeSchoolPanel = () => {
 
             <article className="panel-card wide">
                 <h3>请假审批</h3>
-                <div className="inline-form">
+                <div className="inline-form section-actions">
                     <button
                         className="secondary-btn"
                         onClick={() => void downloadExport("/api/admin/export/module/leave-requests", "leave-requests")}

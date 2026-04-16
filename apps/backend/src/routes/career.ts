@@ -1,14 +1,17 @@
 import { Router } from "express";
 import dayjs from "dayjs";
 import { z } from "zod";
+import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
 import { db } from "../db.js";
-import { requireAuth } from "../middleware/auth.js";
+import { canAccessStudent, requireAuth } from "../middleware/auth.js";
+import { callZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 
 const generateSchema = z.object({
     studentId: z.number().int().positive(),
-    model: z.string().min(3)
+    model: z.string().min(3),
+    apiKey: z.string().min(10)
 });
 
 const combinations = [
@@ -20,6 +23,18 @@ const combinations = [
 ];
 
 export const careerRouter = Router();
+
+const parseJsonAnswer = (answer: string): Record<string, unknown> | null => {
+    const trimmed = answer.trim();
+    const fenced = trimmed.match(/```json\s*([\s\S]*?)```/i) || trimmed.match(/```\s*([\s\S]*?)```/i);
+    const source = fenced ? fenced[1].trim() : trimmed;
+
+    try {
+        return JSON.parse(source) as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+};
 
 careerRouter.get("/public-data/major-requirements", requireAuth, (_req, res) => {
     const rows = db
@@ -34,8 +49,8 @@ careerRouter.get("/public-data/major-requirements", requireAuth, (_req, res) => 
 
 careerRouter.get("/recommendations/:studentId", requireAuth, (req: AuthedRequest, res) => {
     const studentId = Number(req.params.studentId);
-    if (Number.isNaN(studentId)) {
-        res.status(400).json({ success: false, message: "studentId 不合法" });
+    if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
+        res.status(403).json({ success: false, message: "无权查看该学生选科推荐" });
         return;
     }
 
@@ -52,15 +67,42 @@ careerRouter.get("/recommendations/:studentId", requireAuth, (req: AuthedRequest
     res.json({ success: true, message: "查询成功", data: rows });
 });
 
-careerRouter.post("/recommendations/generate", requireAuth, (req, res) => {
+careerRouter.post("/recommendations/generate", requireAuth, async (req, res) => {
     const authedReq = req as AuthedRequest;
     const parsed = generateSchema.safeParse(req.body);
-    if (!parsed.success) {
-        res.status(400).json({ success: false, message: "参数不合法" });
+    if (!parsed.success || !authedReq.user) {
+        res.status(400).json({ success: false, message: "参数不合法，需提供有效 API Key" });
         return;
     }
 
     const input = parsed.data;
+    if (!canAccessStudent(authedReq, input.studentId)) {
+        res.status(403).json({ success: false, message: "无权为该学生生成选科推荐" });
+        return;
+    }
+
+    const student = db
+        .prepare(
+            `SELECT id, name, grade, class_name as className, interests, career_goal as careerGoal
+             FROM students
+             WHERE id = ?`
+        )
+        .get(input.studentId) as
+        | {
+            id: number;
+            name: string;
+            grade: string;
+            className: string;
+            interests: string | null;
+            careerGoal: string | null;
+        }
+        | undefined;
+
+    if (!student) {
+        res.status(404).json({ success: false, message: "学生不存在" });
+        return;
+    }
+
     const scoreRows = db
         .prepare(
             `SELECT subject, AVG(score) as avgScore
@@ -75,67 +117,85 @@ careerRouter.post("/recommendations/generate", requireAuth, (req, res) => {
         return;
     }
 
+    const template = getTemplateById("career-structured-v1");
+    if (!template) {
+        res.status(500).json({ success: false, message: "系统未找到生涯推荐模板" });
+        return;
+    }
+
     const avgMap = new Map(scoreRows.map((item) => [item.subject, item.avgScore]));
-    const scienceScore = (avgMap.get("物理") ?? 0) + (avgMap.get("化学") ?? 0) + (avgMap.get("生物") ?? 0);
-    const socialScore = (avgMap.get("历史") ?? 0) + (avgMap.get("政治") ?? 0) + (avgMap.get("地理") ?? 0);
-    const logic = (avgMap.get("数学") ?? 0) * 1.1;
-    const language = ((avgMap.get("语文") ?? 0) + (avgMap.get("英语") ?? 0)) / 2;
+    const studentData = [
+        `姓名: ${student.name}`,
+        `年级班级: ${student.grade} ${student.className}`,
+        `兴趣: ${student.interests ?? "暂无"}`,
+        `生涯目标: ${student.careerGoal ?? "暂无"}`,
+        `语文: ${(avgMap.get("语文") ?? 0).toFixed(1)}`,
+        `数学: ${(avgMap.get("数学") ?? 0).toFixed(1)}`,
+        `英语: ${(avgMap.get("英语") ?? 0).toFixed(1)}`,
+        `物理: ${(avgMap.get("物理") ?? 0).toFixed(1)}`,
+        `化学: ${(avgMap.get("化学") ?? 0).toFixed(1)}`,
+        `生物: ${(avgMap.get("生物") ?? 0).toFixed(1)}`,
+        `历史: ${(avgMap.get("历史") ?? 0).toFixed(1)}`,
+        `政治: ${(avgMap.get("政治") ?? 0).toFixed(1)}`,
+        `地理: ${(avgMap.get("地理") ?? 0).toFixed(1)}`
+    ].join("\n");
 
-    const chosen = scienceScore + logic >= socialScore + language ? combinations[0] : combinations[3];
+    const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
 
-    const majors = db
-        .prepare(
-            `SELECT major FROM public_major_requirements
-       WHERE required_subjects LIKE ?
-       ORDER BY reference_score DESC
-       LIMIT 5`
-        )
-        .all(`%${chosen.split("+")[0]}%`) as Array<{ major: string }>;
+    let answer = "";
+    try {
+        answer = await callZhipu({
+            apiKey: input.apiKey,
+            model: input.model,
+            prompt,
+            systemPrompt: template.systemPrompt,
+            enableThinking: input.model.includes("thinking") || input.model === "glm-4.7-flash"
+        });
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : "未知错误";
+        res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });
+        return;
+    }
 
-    const reasoning =
-        chosen === combinations[0]
-            ? "学生理科与逻辑能力较强，且稳定性较高，建议优先考虑理工医方向组合。"
-            : "学生人文与表达能力突出，建议优先考虑法学、教育、管理等方向组合。";
+    const parsedAnswer = parseJsonAnswer(answer);
+    if (!parsedAnswer) {
+        res.status(502).json({ success: false, message: "模型返回格式异常，请重试（需返回合法JSON）" });
+        return;
+    }
 
-    const dimensionScores = {
-        science: Number((scienceScore / 3).toFixed(1)),
-        social: Number((socialScore / 3).toFixed(1)),
-        logic: Number(logic.toFixed(1)),
-        language: Number(language.toFixed(1)),
-        stability: Number((70 + (input.studentId % 25)).toFixed(1))
-    };
+    const dimensionScores = (parsedAnswer.dimensionScores ?? {}) as Record<string, number>;
+    const selectedCombination = typeof parsedAnswer.selectedCombination === "string" && parsedAnswer.selectedCombination.length > 0
+        ? parsedAnswer.selectedCombination
+        : combinations[0];
+    const majorSuggestionsFromAi = Array.isArray(parsedAnswer.majorSuggestions)
+        ? parsedAnswer.majorSuggestions.filter((item) => typeof item === "string") as string[]
+        : [];
 
-    const evidenceChain = [
-        {
-            dimension: "science",
-            evidence: `理科三科均分 ${dimensionScores.science}`,
-            impact: chosen.includes("物理") ? "支撑理科组合优先" : "理科维度略弱"
-        },
-        {
-            dimension: "logic",
-            evidence: `数学推理能力分 ${dimensionScores.logic}`,
-            impact: "直接影响工科和信息类专业适配"
-        },
-        {
-            dimension: "language",
-            evidence: `语文/英语综合分 ${dimensionScores.language}`,
-            impact: "影响文法类专业竞争力"
-        }
-    ];
+    const majors = majorSuggestionsFromAi.length > 0
+        ? majorSuggestionsFromAi
+        : (db
+            .prepare(
+                `SELECT major FROM public_major_requirements
+                 WHERE required_subjects LIKE ?
+                 ORDER BY reference_score DESC
+                 LIMIT 5`
+            )
+            .all(`%${selectedCombination.split("+")[0]}%`) as Array<{ major: string }>).map((item) => item.major);
 
-    const counterfactual =
-        chosen === combinations[0]
-            ? "若文科维度提升至与理科相当，可考虑历史+政治+地理组合，但当前理科稳定性优势更明显。"
-            : "若理科维度提升8分以上，可考虑物理+化学+生物组合，以扩大理工医专业覆盖。";
+    const reasoning = typeof parsedAnswer.summary === "string" && parsedAnswer.summary.length > 0
+        ? parsedAnswer.summary
+        : "模型已完成分析，请结合证据链进行人工复核。";
 
-    const confidence = Number(
-        (
-            Math.min(95, Math.max(55, (dimensionScores.stability + Math.max(dimensionScores.science, dimensionScores.social)) / 2))
-        ).toFixed(1)
-    );
+    const evidenceChain = Array.isArray(parsedAnswer.evidenceChain) ? parsedAnswer.evidenceChain : [];
+    const counterfactual = typeof parsedAnswer.counterfactual === "string" ? parsedAnswer.counterfactual : "暂无";
+    const confidence = typeof parsedAnswer.confidence === "number" ? parsedAnswer.confidence : 70;
 
     const scoreBreakdown = {
-        ...dimensionScores,
+        science: Number(dimensionScores.science ?? 0),
+        social: Number(dimensionScores.social ?? 0),
+        logic: Number(dimensionScores.logic ?? 0),
+        language: Number(dimensionScores.language ?? 0),
+        stability: Number(dimensionScores.stability ?? 0),
         evidenceChain,
         counterfactual,
         confidence
@@ -147,9 +207,9 @@ careerRouter.post("/recommendations/generate", requireAuth, (req, res) => {
     ).run(
         input.studentId,
         input.model,
-        chosen,
+        selectedCombination,
         reasoning,
-        majors.map((item) => item.major).join(","),
+        majors.join(","),
         JSON.stringify(scoreBreakdown),
         dayjs().toISOString()
     );
@@ -163,7 +223,8 @@ careerRouter.post("/recommendations/generate", requireAuth, (req, res) => {
             detail: {
                 studentId: input.studentId,
                 model: input.model,
-                selectedCombination: chosen,
+                selectedCombination,
+                ai: true,
                 confidence
             },
             ipAddress: extractIp(req)
@@ -174,9 +235,9 @@ careerRouter.post("/recommendations/generate", requireAuth, (req, res) => {
         success: true,
         message: "生成成功",
         data: {
-            selectedCombination: chosen,
+            selectedCombination,
             reasoning,
-            majorSuggestions: majors.map((item) => item.major),
+            majorSuggestions: majors,
             scoreBreakdown,
             counterfactual,
             confidence

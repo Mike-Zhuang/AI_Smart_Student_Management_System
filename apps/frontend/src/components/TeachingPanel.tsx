@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { downloadExport } from "../lib/export";
+import { storage } from "../lib/storage";
+import type { User } from "../lib/types";
 
 type Task = {
     id: number;
@@ -25,11 +27,13 @@ type Analytics = {
     avgResearchScore: number;
 };
 
-export const TeachingPanel = () => {
+export const TeachingPanel = ({ user }: { user: User }) => {
     const [tasks, setTasks] = useState<Task[]>([]);
     const [research, setResearch] = useState<Research[]>([]);
     const [analytics, setAnalytics] = useState<Analytics | null>(null);
     const [error, setError] = useState("");
+    const [apiKey, setApiKey] = useState(storage.getApiKey());
+    const [aiPlanMap, setAiPlanMap] = useState<Record<number, string>>({});
     const [form, setForm] = useState({
         title: "",
         taskType: "lesson_plan",
@@ -67,6 +71,24 @@ export const TeachingPanel = () => {
             await load();
         } catch (err) {
             setError(err instanceof Error ? err.message : "创建失败");
+        }
+    };
+
+    const generateAiPlan = async (taskId: number) => {
+        if (!apiKey.trim()) {
+            setError("请先填写 API Key 才能生成 AI 执行计划");
+            return;
+        }
+
+        try {
+            storage.setApiKey(apiKey.trim());
+            const response = await apiRequest<{ answer: string }>(`/api/teaching/tasks/${taskId}/ai-plan`, {
+                method: "POST",
+                body: JSON.stringify({ apiKey: apiKey.trim(), model: "glm-4.7-flash" })
+            });
+            setAiPlanMap((prev) => ({ ...prev, [taskId]: response.data.answer }));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "生成失败");
         }
     };
 
@@ -108,6 +130,17 @@ export const TeachingPanel = () => {
                         导出任务记录
                     </button>
                 </form>
+                <div className="inline-form section-actions">
+                    <label>
+                        AI Key（用于任务优化）
+                        <input
+                            value={apiKey}
+                            onChange={(event) => setApiKey(event.target.value)}
+                            placeholder="请输入可用的 API Key"
+                        />
+                    </label>
+                    <p>{user.role === "head_teacher" ? "你当前是班主任角色，可联动班级治理任务。" : "你当前是教师角色，重点优化教学与教研任务。"}</p>
+                </div>
             </article>
 
             <article className="panel-card">
@@ -133,6 +166,12 @@ export const TeachingPanel = () => {
                                 {item.taskType} · {item.status}
                             </p>
                             <small>{item.dueDate}</small>
+                            <div className="inline-form compact-actions">
+                                <button className="secondary-btn" type="button" onClick={() => void generateAiPlan(item.id)}>
+                                    AI生成执行计划
+                                </button>
+                            </div>
+                            {aiPlanMap[item.id] ? <p className="ai-draft">AI建议: {aiPlanMap[item.id]}</p> : null}
                         </div>
                     ))}
                 </div>

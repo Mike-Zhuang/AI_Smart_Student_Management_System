@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { downloadFile } from "../lib/export";
 
 const SAMPLE_STUDENT_JSON = `[
   {
@@ -63,14 +64,32 @@ export const DataImportPanel = () => {
     <section className="panel-grid">
       <article className="panel-card wide">
         <h3>真实数据导入模板（后期可替换模拟数据）</h3>
-        <p>
-          后端已内置模板字段，并提供 CSV 模板文件：
-          apps/backend/templates/students-template.csv 与 apps/backend/templates/exam-results-template.csv。
-        </p>
+        <p>无需去后端目录查找，直接点击下载模板即可开始整理真实数据。</p>
+        <div className="inline-form section-actions">
+          <button
+            className="secondary-btn"
+            onClick={() => void downloadFile("/api/data-import/template-files/students", "students-template.csv")}
+          >
+            下载学生模板
+          </button>
+          <button
+            className="secondary-btn"
+            onClick={() => void downloadFile("/api/data-import/template-files/exam-results", "exam-results-template.csv")}
+          >
+            下载成绩模板
+          </button>
+          <button
+            className="secondary-btn"
+            onClick={() => void downloadFile("/api/data-import/template-files/teachers", "teachers-template.csv")}
+          >
+            下载教师班级模板
+          </button>
+        </div>
       </article>
 
       <article className="panel-card wide">
         <h4>导入学生基础数据（JSON）</h4>
+        <p>可先用上方 CSV 模板整理数据，再转换为 JSON 导入；后续可平滑升级为批量文件上传。</p>
         <form onSubmit={importStudents} className="form-stack">
           <textarea rows={10} value={studentJson} onChange={(event) => setStudentJson(event.target.value)} />
           <button className="primary-btn" type="submit">

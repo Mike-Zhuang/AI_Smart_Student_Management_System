@@ -166,9 +166,13 @@ authRouter.get("/demo-accounts", (_req, res) => {
         data: [
             { role: "admin", username: "admin", password: "admin123" },
             { role: "teacher", username: "teacher_zhang", password: "teacher123" },
+            { role: "teacher", username: "teacher_wu", password: "teacher123" },
             { role: "head_teacher", username: "head_li", password: "head123" },
+            { role: "head_teacher", username: "head_chen", password: "head123" },
             { role: "parent", username: "parent_wang", password: "parent123" },
-            { role: "student", username: "student_001", password: "student123" }
+            { role: "parent", username: "parent_liu", password: "parent123" },
+            { role: "student", username: "student_001", password: "student123" },
+            { role: "student", username: "student_002", password: "student123" }
         ]
     });
 });

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { downloadExport } from "../lib/export";
+import { storage } from "../lib/storage";
+import type { User } from "../lib/types";
 
 type Student = {
     id: number;
@@ -38,13 +40,23 @@ type MajorRow = {
     referenceScore: number;
 };
 
-export const CareerPanel = () => {
+export const CareerPanel = ({ user }: { user: User }) => {
     const [students, setStudents] = useState<Student[]>([]);
     const [studentId, setStudentId] = useState<number | null>(null);
     const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
     const [majors, setMajors] = useState<MajorRow[]>([]);
     const [model, setModel] = useState("glm-4.7-flash");
+    const [apiKey, setApiKey] = useState(storage.getApiKey());
     const [error, setError] = useState("");
+    const [loading, setLoading] = useState(false);
+
+    const dimensionLabelMap: Record<string, string> = {
+        science: "科学思维",
+        social: "社会责任",
+        logic: "逻辑推理",
+        language: "语言表达",
+        stability: "学习稳定性"
+    };
 
     const parseBreakdown = (raw: string): ScoreBreakdown | null => {
         try {
@@ -56,7 +68,7 @@ export const CareerPanel = () => {
 
     const loadStudents = async () => {
         const response = await apiRequest<Student[]>("/api/students");
-        setStudents(response.data.slice(0, 40));
+        setStudents(response.data.slice(0, 80));
         if (!studentId && response.data.length > 0) {
             setStudentId(response.data[0].id);
         }
@@ -96,15 +108,24 @@ export const CareerPanel = () => {
             return;
         }
 
+        if (!apiKey.trim()) {
+            setError("生涯推荐已改为真实 AI 调用，请先填写 API Key");
+            return;
+        }
+
         setError("");
+        setLoading(true);
         try {
+            storage.setApiKey(apiKey.trim());
             await apiRequest("/api/career/recommendations/generate", {
                 method: "POST",
-                body: JSON.stringify({ studentId, model })
+                body: JSON.stringify({ studentId, model, apiKey: apiKey.trim() })
             });
             await loadRecommendations(studentId);
         } catch (err) {
             setError(err instanceof Error ? err.message : "生成失败");
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -115,10 +136,14 @@ export const CareerPanel = () => {
                 <div className="inline-form">
                     <label>
                         选择学生
-                        <select value={studentId ?? ""} onChange={(event) => setStudentId(Number(event.target.value))}>
+                        <select
+                            value={studentId ?? ""}
+                            onChange={(event) => setStudentId(Number(event.target.value))}
+                            disabled={students.length <= 1 && (user.role === "parent" || user.role === "student")}
+                        >
                             {students.map((item) => (
                                 <option key={item.id} value={item.id}>
-                                    {item.name} · {item.grade} · {item.className}
+                                    {item.name} / {item.grade} / {item.className}
                                 </option>
                             ))}
                         </select>
@@ -131,8 +156,16 @@ export const CareerPanel = () => {
                             <option value="glm-4.6v-flash">GLM-4.6V-Flash</option>
                         </select>
                     </label>
-                    <button className="primary-btn" onClick={generate}>
-                        生成选课建议
+                    <label>
+                        API Key
+                        <input
+                            value={apiKey}
+                            onChange={(event) => setApiKey(event.target.value)}
+                            placeholder="请输入可用的 API Key"
+                        />
+                    </label>
+                    <button className="primary-btn" onClick={generate} disabled={loading}>
+                        {loading ? "生成中..." : "生成选课建议"}
                     </button>
                     <button
                         className="secondary-btn"
@@ -171,28 +204,14 @@ export const CareerPanel = () => {
                         return (
                             <div className="explain-grid">
                                 <div className="score-grid">
-                                    <div className="score-item">
-                                        <span>science</span>
-                                        <strong>{breakdown.science}</strong>
-                                    </div>
-                                    <div className="score-item">
-                                        <span>social</span>
-                                        <strong>{breakdown.social}</strong>
-                                    </div>
-                                    <div className="score-item">
-                                        <span>logic</span>
-                                        <strong>{breakdown.logic}</strong>
-                                    </div>
-                                    <div className="score-item">
-                                        <span>language</span>
-                                        <strong>{breakdown.language}</strong>
-                                    </div>
-                                    <div className="score-item">
-                                        <span>stability</span>
-                                        <strong>{breakdown.stability}</strong>
-                                    </div>
+                                    {(["science", "social", "logic", "language", "stability"] as const).map((key) => (
+                                        <div className="score-item" key={key}>
+                                            <span>{dimensionLabelMap[key]}</span>
+                                            <strong>{breakdown[key]}</strong>
+                                        </div>
+                                    ))}
                                     <div className="score-item score-item-brand">
-                                        <span>confidence</span>
+                                        <span>置信度</span>
                                         <strong>{breakdown.confidence ?? "--"}</strong>
                                     </div>
                                 </div>

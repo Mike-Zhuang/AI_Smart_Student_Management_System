@@ -29,7 +29,7 @@ const templateChatSchema = z.object({
     apiKey: z.string().min(10),
     model: z.string().min(3),
     templateId: z.string().min(3),
-    variables: z.record(z.string()).optional(),
+    variables: z.record(z.string()).default({}),
     enableThinking: z.boolean().optional()
 });
 
@@ -114,7 +114,19 @@ aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
         return;
     }
 
-    const prompt = `${fillTemplate(template.template, input.variables ?? {})}\n\n输出规范:\n${template.outputSpec}`;
+    const prompt = `${fillTemplate(template.template, input.variables)}\n\n输出规范:\n${template.outputSpec}`;
+
+    const missingVariables = template.variableMeta
+        .map((item) => item.key)
+        .filter((key) => !input.variables[key] || input.variables[key].trim().length === 0);
+
+    if (missingVariables.length > 0) {
+        res.status(400).json({
+            success: false,
+            message: `模板变量缺失: ${missingVariables.join(", ")}`
+        });
+        return;
+    }
 
     try {
         const startedAt = Date.now();
@@ -122,6 +134,7 @@ aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
             apiKey: input.apiKey,
             model: input.model,
             prompt,
+            systemPrompt: template.systemPrompt,
             enableThinking: input.enableThinking
         });
 

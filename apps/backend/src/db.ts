@@ -53,6 +53,27 @@ const createSchema = (): void => {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS parent_student_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_user_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      relation TEXT NOT NULL DEFAULT '监护人',
+      created_at TEXT NOT NULL,
+      UNIQUE(parent_user_id, student_id),
+      FOREIGN KEY(parent_user_id) REFERENCES users(id),
+      FOREIGN KEY(student_id) REFERENCES students(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS teacher_class_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      teacher_user_id INTEGER NOT NULL,
+      class_name TEXT NOT NULL,
+      is_head_teacher INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      UNIQUE(teacher_user_id, class_name),
+      FOREIGN KEY(teacher_user_id) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS exam_results (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL,
@@ -176,18 +197,25 @@ const createSchema = (): void => {
   `);
 };
 
-const createUser = (username: string, displayName: string, role: string, password: string, linkedStudentId: number | null = null): void => {
-    db.prepare(
-        `INSERT INTO users (username, display_name, password_hash, role, linked_student_id, created_at)
-     VALUES (@username, @displayName, @passwordHash, @role, @linkedStudentId, @createdAt)`
-    ).run({
-        username,
-        displayName,
-        passwordHash: hashPassword(password),
-        role,
-        linkedStudentId,
-        createdAt: dayjs().toISOString()
-    });
+const createUser = (username: string, displayName: string, role: string, password: string, linkedStudentId: number | null = null): number => {
+  const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username) as { id: number } | undefined;
+  if (existing) {
+    return existing.id;
+  }
+
+  const result = db.prepare(
+    `INSERT INTO users (username, display_name, password_hash, role, linked_student_id, created_at)
+   VALUES (@username, @displayName, @passwordHash, @role, @linkedStudentId, @createdAt)`
+  ).run({
+    username,
+    displayName,
+    passwordHash: hashPassword(password),
+    role,
+    linkedStudentId,
+    createdAt: dayjs().toISOString()
+  });
+
+  return Number(result.lastInsertRowid);
 };
 
 const seedPublicData = (): void => {
@@ -218,160 +246,332 @@ const seedPublicData = (): void => {
 };
 
 const seedDemoData = (): void => {
-    const userCount = db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
-    if (userCount.count > 0) {
-        return;
-    }
+  const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
-    createUser("admin", "系统管理员", ROLES.ADMIN, "admin123");
-    createUser("teacher_zhang", "张老师", ROLES.TEACHER, "teacher123");
-    createUser("head_li", "李班主任", ROLES.HEAD_TEACHER, "head123");
-    createUser("parent_wang", "王家长", ROLES.PARENT, "parent123");
+  const adminId = createUser("admin", "系统管理员", ROLES.ADMIN, "admin123");
+  const teacherZhangId = createUser("teacher_zhang", "张老师", ROLES.TEACHER, "teacher123");
+  const teacherWuId = createUser("teacher_wu", "吴老师", ROLES.TEACHER, "teacher123");
+  const headLiId = createUser("head_li", "李班主任", ROLES.HEAD_TEACHER, "head123");
+  const headChenId = createUser("head_chen", "陈班主任", ROLES.HEAD_TEACHER, "head123");
+  const parentWangId = createUser("parent_wang", "王家长", ROLES.PARENT, "parent123");
+  const parentLiuId = createUser("parent_liu", "刘家长", ROLES.PARENT, "parent123");
 
-    const insertStudent = db.prepare(
-        `INSERT INTO students (student_no, name, grade, class_name, subject_combination, interests, career_goal, parent_user_id, created_at)
+  const parentPool: number[] = [parentWangId, parentLiuId];
+  for (let i = 1; i <= 336; i += 1) {
+    parentPool.push(
+      createUser(`parent_auto_${String(i).padStart(4, "0")}`, `家长${String(i).padStart(4, "0")}`, ROLES.PARENT, "parent123")
+    );
+  }
+
+  const insertStudent = db.prepare(
+    `INSERT OR IGNORE INTO students (student_no, name, grade, class_name, subject_combination, interests, career_goal, parent_user_id, created_at)
      VALUES (@studentNo, @name, @grade, @className, @subjectCombination, @interests, @careerGoal, @parentUserId, @createdAt)`
-    );
+  );
 
-    const classes = ["高一(1)班", "高一(2)班", "高二(1)班", "高二(2)班", "高三(1)班"];
-    const combinations = ["物理+化学+生物", "物理+化学+政治", "物理+生物+地理", "历史+政治+地理", "历史+生物+地理"];
-    const interests = ["编程,机器人", "文学,历史", "生物,医学", "法律,辩论", "财经,管理", "艺术,设计"];
-    const goals = ["人工智能工程师", "临床医生", "中学教师", "律师", "产品经理", "数据分析师"];
+  const combinations = ["物理+化学+生物", "物理+化学+政治", "物理+生物+地理", "历史+政治+地理", "历史+生物+地理"];
+  const interests = ["编程,机器人", "文学,历史", "生物,医学", "法律,辩论", "财经,管理", "艺术,设计", "体育,康复", "心理学,社会学"];
+  const goals = ["人工智能工程师", "临床医生", "中学教师", "律师", "产品经理", "数据分析师", "建筑设计师", "新能源工程师"];
 
-    for (let i = 1; i <= 120; i += 1) {
-        const grade = i <= 40 ? "高一" : i <= 80 ? "高二" : "高三";
-        insertStudent.run({
-            studentNo: `S2026${String(i).padStart(3, "0")}`,
-            name: `学生${String(i).padStart(3, "0")}`,
-            grade,
-            className: classes[i % classes.length],
-            subjectCombination: combinations[i % combinations.length],
-            interests: interests[i % interests.length],
-            careerGoal: goals[i % goals.length],
-            parentUserId: 4,
-            createdAt: dayjs().subtract(8, "month").toISOString()
-        });
-    }
+  const existingStudentCount = (db.prepare("SELECT COUNT(*) as count FROM students").get() as { count: number }).count;
+  const targetStudentCount = 1000;
+  for (let i = existingStudentCount + 1; i <= targetStudentCount; i += 1) {
+    const grade = i <= 334 ? "高一" : i <= 667 ? "高二" : "高三";
+    const className = `${grade}(${(i % 5) + 1})班`;
+    const parentUserId = parentPool[i % parentPool.length];
 
-    const firstStudent = db.prepare("SELECT id FROM students ORDER BY id LIMIT 1").get() as { id: number };
-    createUser("student_001", "演示学生", ROLES.STUDENT, "student123", firstStudent.id);
+    insertStudent.run({
+      studentNo: `S2026${String(i).padStart(4, "0")}`,
+      name: `学生${String(i).padStart(4, "0")}`,
+      grade,
+      className,
+      subjectCombination: combinations[i % combinations.length],
+      interests: interests[i % interests.length],
+      careerGoal: goals[i % goals.length],
+      parentUserId,
+      createdAt: dayjs().subtract(9, "month").add(i % 90, "day").toISOString()
+    });
+  }
 
-    db.prepare("UPDATE users SET linked_student_id = ? WHERE username = 'student_001'").run(firstStudent.id);
+  const students = db.prepare("SELECT id, parent_user_id as parentUserId, class_name as className FROM students ORDER BY id ASC").all() as Array<{
+    id: number;
+    parentUserId: number | null;
+    className: string;
+  }>;
 
-    const subjects = ["语文", "数学", "英语", "物理", "化学", "生物", "历史", "政治", "地理"];
-    const exams = [
-        { name: "2025学年第一学期期中", date: "2025-11-15" },
-        { name: "2025学年第一学期期末", date: "2026-01-20" },
-        { name: "2025学年第二学期月考", date: "2026-03-12" }
-    ];
+  const firstStudent = students[0];
+  const secondStudent = students[1];
+  const student001Id = createUser("student_001", "演示学生A", ROLES.STUDENT, "student123", firstStudent?.id ?? null);
+  const student002Id = createUser("student_002", "演示学生B", ROLES.STUDENT, "student123", secondStudent?.id ?? null);
 
-    const students = db.prepare("SELECT id FROM students").all() as Array<{ id: number }>;
-    const resultStmt = db.prepare(
-        `INSERT INTO exam_results (student_id, subject, exam_name, exam_date, score, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-    );
+  db.prepare("UPDATE users SET linked_student_id = ? WHERE id = ?").run(firstStudent?.id ?? null, student001Id);
+  db.prepare("UPDATE users SET linked_student_id = ? WHERE id = ?").run(secondStudent?.id ?? null, student002Id);
 
-    for (const student of students) {
-        for (const exam of exams) {
-            for (const subject of subjects) {
-                const base = 55 + ((student.id * 7 + subject.length * 5) % 45);
-                const noise = (student.id + subject.charCodeAt(0)) % 6;
-                resultStmt.run(student.id, subject, exam.name, exam.date, Math.min(100, base + noise), dayjs().toISOString());
-            }
-        }
-    }
-
-    const growthStmt = db.prepare(
-        `INSERT INTO growth_profiles (student_id, summary, risk_level, last_updated)
+  db.prepare("DELETE FROM teacher_class_links WHERE teacher_user_id IN (?, ?, ?, ?)").run(
+    teacherZhangId,
+    teacherWuId,
+    headLiId,
+    headChenId
+  );
+  const classLinkStmt = db.prepare(
+    `INSERT OR IGNORE INTO teacher_class_links (teacher_user_id, class_name, is_head_teacher, created_at)
      VALUES (?, ?, ?, ?)`
-    );
-    const alertStmt = db.prepare(
-        `INSERT INTO alerts (student_id, alert_type, content, status, created_at)
-     VALUES (?, ?, ?, ?, ?)`
+  );
+  classLinkStmt.run(teacherZhangId, "高一(1)班", 0, dayjs().toISOString());
+  classLinkStmt.run(teacherZhangId, "高一(2)班", 0, dayjs().toISOString());
+  classLinkStmt.run(teacherWuId, "高二(1)班", 0, dayjs().toISOString());
+  classLinkStmt.run(teacherWuId, "高二(2)班", 0, dayjs().toISOString());
+  classLinkStmt.run(headLiId, "高一(1)班", 1, dayjs().toISOString());
+  classLinkStmt.run(headLiId, "高一(3)班", 1, dayjs().toISOString());
+  classLinkStmt.run(headChenId, "高二(1)班", 1, dayjs().toISOString());
+  classLinkStmt.run(headChenId, "高二(3)班", 1, dayjs().toISOString());
+
+  const parentLinkInsert = db.prepare(
+    `INSERT OR IGNORE INTO parent_student_links (parent_user_id, student_id, relation, created_at)
+     VALUES (?, ?, ?, ?)`
+  );
+
+  for (const student of students) {
+    if (student.parentUserId) {
+      parentLinkInsert.run(student.parentUserId, student.id, "监护人", dayjs().toISOString());
+    }
+
+    const secondParent = parentPool[(student.id + 17) % parentPool.length];
+    const thirdParent = parentPool[(student.id + 43) % parentPool.length];
+    if (student.id % 11 === 0 && secondParent !== student.parentUserId) {
+      parentLinkInsert.run(secondParent, student.id, "共同监护人", dayjs().toISOString());
+    }
+    if (student.id % 37 === 0 && thirdParent !== student.parentUserId && thirdParent !== secondParent) {
+      parentLinkInsert.run(thirdParent, student.id, "共同监护人", dayjs().toISOString());
+    }
+  }
+
+  const demoStudents = students.slice(0, 6).map((item) => item.id);
+  db.prepare("DELETE FROM parent_student_links WHERE parent_user_id IN (?, ?)").run(parentWangId, parentLiuId);
+  demoStudents.slice(0, 3).forEach((studentId) => {
+    parentLinkInsert.run(parentWangId, studentId, "监护人", dayjs().toISOString());
+    db.prepare("UPDATE students SET parent_user_id = ? WHERE id = ?").run(parentWangId, studentId);
+  });
+  demoStudents.slice(3, 6).forEach((studentId) => {
+    parentLinkInsert.run(parentLiuId, studentId, "监护人", dayjs().toISOString());
+    db.prepare("UPDATE students SET parent_user_id = ? WHERE id = ?").run(parentLiuId, studentId);
+  });
+
+  const subjects = ["语文", "数学", "英语", "物理", "化学", "生物", "历史", "政治", "地理"];
+  const subjectBias: Record<string, number> = {
+    语文: 3,
+    数学: 0,
+    英语: 2,
+    物理: -1,
+    化学: 0,
+    生物: 1,
+    历史: 2,
+    政治: 1,
+    地理: 0
+  };
+  const exams = [
+    { name: "2025学年第一学期期中", date: "2025-11-15", shift: -3 },
+    { name: "2025学年第一学期期末", date: "2026-01-20", shift: 1 },
+    { name: "2025学年第二学期月考", date: "2026-03-12", shift: 4 },
+    { name: "2025学年第二学期期中", date: "2026-04-25", shift: -1 },
+    { name: "2025学年第二学期期末", date: "2026-06-28", shift: 6 }
+  ];
+
+  const examCountMeta = db.prepare("SELECT COUNT(*) as count, COUNT(DISTINCT exam_name) as examCount FROM exam_results").get() as {
+    count: number;
+    examCount: number;
+  };
+  const expectedRows = students.length * subjects.length * exams.length;
+
+  if (examCountMeta.examCount < exams.length || examCountMeta.count < Math.floor(expectedRows * 0.85)) {
+    db.prepare("DELETE FROM exam_results").run();
+    const resultStmt = db.prepare(
+      `INSERT INTO exam_results (student_id, subject, exam_name, exam_date, score, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
     );
 
     for (const student of students) {
-        const risk = student.id % 5 === 0 ? "high" : student.id % 3 === 0 ? "medium" : "low";
-        growthStmt.run(student.id, `学生${student.id}在最近三次考试中表现稳定，建议强化弱势学科的阶段复盘。`, risk, dayjs().toISOString());
-
-        if (risk !== "low") {
-            alertStmt.run(
-                student.id,
-                "academic",
-                risk === "high" ? "连续两次月考数学低于60分，建议一对一干预。" : "英语成绩波动较大，建议增加听力训练。",
-                "open",
-                dayjs().subtract(student.id % 10, "day").toISOString()
-            );
+      const baseline = 58 + ((student.id * 13) % 30);
+      for (let examIndex = 0; examIndex < exams.length; examIndex += 1) {
+        const exam = exams[examIndex];
+        for (const subject of subjects) {
+          const noise = ((student.id + subject.charCodeAt(0) * 3 + examIndex * 7) % 13) - 6;
+          const dip = student.id % 17 === 0 && examIndex === 1 ? -8 : 0;
+          const rebound = student.id % 17 === 0 && examIndex === 4 ? 5 : 0;
+          const score = clamp(baseline + (subjectBias[subject] ?? 0) + exam.shift + noise + dip + rebound, 35, 99);
+          resultStmt.run(student.id, subject, exam.name, exam.date, Number(score.toFixed(1)), dayjs().toISOString());
         }
+      }
     }
+  }
 
-    db.prepare(
-        `INSERT INTO career_recommendations (student_id, model, selected_combination, reasoning, major_suggestions, score_breakdown, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-        firstStudent.id,
+  const growthStmt = db.prepare(
+    `INSERT INTO growth_profiles (student_id, summary, risk_level, last_updated)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(student_id) DO UPDATE SET
+       summary = excluded.summary,
+       risk_level = excluded.risk_level,
+       last_updated = excluded.last_updated`
+  );
+
+  for (const student of students) {
+    const risk = student.id % 10 === 0 ? "high" : student.id % 4 === 0 ? "medium" : "low";
+    growthStmt.run(
+      student.id,
+      `${student.className}学生在最近五次考试中呈现阶段波动。建议围绕薄弱学科做“周测-复盘-错题回归”闭环。`,
+      risk,
+      dayjs().toISOString()
+    );
+  }
+
+  const alertCount = (db.prepare("SELECT COUNT(*) as count FROM alerts").get() as { count: number }).count;
+  if (alertCount < 400) {
+    db.prepare("DELETE FROM alerts").run();
+    const alertStmt = db.prepare(
+      `INSERT INTO alerts (student_id, alert_type, content, status, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    );
+    for (const student of students) {
+      if (student.id % 10 === 0) {
+        alertStmt.run(student.id, "academic", "连续两次考试核心学科低于班级均值，建议家校联合干预。", "open", dayjs().subtract(student.id % 8, "day").toISOString());
+        alertStmt.run(student.id, "behavior", "课堂参与度下降，建议与班主任进行面谈并追踪两周。", "open", dayjs().subtract((student.id % 8) + 1, "day").toISOString());
+      } else if (student.id % 4 === 0) {
+        alertStmt.run(student.id, "academic", "英语学科波动较大，建议增加听力与阅读分层训练。", "open", dayjs().subtract(student.id % 10, "day").toISOString());
+      }
+    }
+  }
+
+  const recommendationCount = (db.prepare("SELECT COUNT(*) as count FROM career_recommendations").get() as { count: number }).count;
+  if (recommendationCount < 200) {
+    const recStmt = db.prepare(
+      `INSERT INTO career_recommendations (student_id, model, selected_combination, reasoning, major_suggestions, score_breakdown, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const student of students.slice(0, 260)) {
+      const combination = combinations[student.id % combinations.length];
+      const confidence = 62 + (student.id % 30);
+      const scoreBreakdown = {
+        science: 60 + (student.id % 32),
+        social: 58 + ((student.id * 3) % 31),
+        logic: 62 + ((student.id * 5) % 29),
+        language: 57 + ((student.id * 7) % 27),
+        stability: 64 + ((student.id * 2) % 26),
+        confidence,
+        evidenceChain: [
+          { dimension: "science", evidence: "理化生均分位于年级中上区间", impact: "支撑理工类专业适配" },
+          { dimension: "language", evidence: "语文英语保持稳定", impact: "利于综合表达与面试表现" }
+        ],
+        counterfactual: "若历史政治提升8分，可扩大文社类专业覆盖。"
+      };
+
+      recStmt.run(
+        student.id,
         "glm-4.7-flash",
-        "物理+化学+生物",
-        "学生理科成绩稳定，且职业兴趣集中在工程和医学方向，推荐该组合以保持专业覆盖面。",
-        "计算机科学与技术,自动化,临床医学",
-        JSON.stringify({ logic: 88, language: 72, science: 91, stability: 84 }),
-        dayjs().toISOString()
+        combination,
+        "基于阶段成绩与兴趣目标生成结构化推荐，建议结合班主任访谈后最终确认。",
+        "计算机科学与技术,自动化,软件工程",
+        JSON.stringify(scoreBreakdown),
+        dayjs().subtract(student.id % 30, "day").toISOString()
+      );
+    }
+  }
+
+  const messageCount = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
+  if (messageCount < 300) {
+    const messageStmt = db.prepare(
+      `INSERT INTO messages (sender_user_id, receiver_user_id, receiver_role, title, content, module, created_at, is_read)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
+    for (let i = 1; i <= 320; i += 1) {
+      const receiver = parentPool[i % parentPool.length];
+      const sender = i % 2 === 0 ? headLiId : teacherZhangId;
+      messageStmt.run(
+        sender,
+        receiver,
+        ROLES.PARENT,
+        `家校周报提醒 #${i}`,
+        `第${i}期家校沟通提醒：请关注本周作业完成率与课堂表现，并于周五前完成回执。`,
+        "home-school",
+        dayjs().subtract(i % 28, "day").toISOString(),
+        i % 5 === 0 ? 0 : 1
+      );
+    }
+  }
 
-    db.prepare(
-        `INSERT INTO messages (sender_user_id, receiver_user_id, receiver_role, title, content, module, created_at, is_read)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(3, 4, ROLES.PARENT, "高二年级选科说明会通知", "本周五19:00召开线上选科说明会，请家长准时参加。", "home-school", dayjs().toISOString(), 0);
-
-    db.prepare(
-        `INSERT INTO leave_requests (student_id, parent_user_id, reason, start_date, end_date, status, review_note, reviewed_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(firstStudent.id, 4, "流感居家观察", "2026-04-17", "2026-04-18", "pending", null, null, dayjs().toISOString());
-
-    db.prepare(
-        `INSERT INTO teaching_tasks (teacher_user_id, title, task_type, status, due_date, created_at)
-     VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`
-    ).run(
-        2,
-        "高二数学期中复习教案优化",
-        "lesson_plan",
-        "in_progress",
-        "2026-04-20",
-        dayjs().toISOString(),
-        3,
-        "班级家长会学情分析报告",
-        "communication",
-        "todo",
-        "2026-04-22",
-        dayjs().toISOString()
+  const leaveCount = (db.prepare("SELECT COUNT(*) as count FROM leave_requests").get() as { count: number }).count;
+  if (leaveCount < 120) {
+    const leaveStmt = db.prepare(
+      `INSERT INTO leave_requests (student_id, parent_user_id, reason, start_date, end_date, status, review_note, reviewed_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
+    for (const student of students.slice(0, 140)) {
+      const status = student.id % 6 === 0 ? "pending" : student.id % 2 === 0 ? "approved" : "rejected";
+      leaveStmt.run(
+        student.id,
+        student.parentUserId ?? parentWangId,
+        student.id % 3 === 0 ? "发热居家观察" : "家庭事务请假",
+        dayjs().subtract(student.id % 20, "day").format("YYYY-MM-DD"),
+        dayjs().subtract((student.id % 20) - 1, "day").format("YYYY-MM-DD"),
+        status,
+        status === "approved" ? "请按时返校并提交健康记录" : status === "rejected" ? "请补充医疗凭证" : null,
+        status === "pending" ? null : (student.id % 2 === 0 ? headLiId : teacherZhangId),
+        dayjs().subtract(student.id % 20, "day").toISOString()
+      );
+    }
+  }
 
-    db.prepare(
-        `INSERT INTO teaching_research (teacher_user_id, title, content, category, performance_score, created_at)
-     VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`
-    ).run(
-        2,
-        "分层作业在函数单元中的应用",
-        "通过难度分层作业提升中下游学生跟进效率，整体作业完成率提高14%。",
-        "教研论文",
-        87.5,
-        dayjs().toISOString(),
-        3,
-        "班级共育机制优化",
-        "建立每周家校反馈闭环后，家长消息已读率从61%提升到93%。",
-        "班主任管理",
-        91.2,
-        dayjs().toISOString()
+  const taskCount = (db.prepare("SELECT COUNT(*) as count FROM teaching_tasks").get() as { count: number }).count;
+  if (taskCount < 100) {
+    const taskStmt = db.prepare(
+      `INSERT INTO teaching_tasks (teacher_user_id, title, task_type, status, due_date, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
     );
+    const taskTypes = ["lesson_plan", "research", "communication", "training"];
+    const statuses = ["todo", "in_progress", "done"];
+    for (let i = 1; i <= 120; i += 1) {
+      const teacherId = i % 3 === 0 ? headLiId : i % 2 === 0 ? teacherWuId : teacherZhangId;
+      taskStmt.run(
+        teacherId,
+        `教研任务 #${i}`,
+        taskTypes[i % taskTypes.length],
+        statuses[i % statuses.length],
+        dayjs().add((i % 35) + 1, "day").format("YYYY-MM-DD"),
+        dayjs().subtract(i % 25, "day").toISOString()
+      );
+    }
+  }
 
-    const inviteStmt = db.prepare(
-        `INSERT INTO invite_codes (code, role, expires_at, used, created_at)
+  const researchCount = (db.prepare("SELECT COUNT(*) as count FROM teaching_research").get() as { count: number }).count;
+  if (researchCount < 60) {
+    const researchStmt = db.prepare(
+      `INSERT INTO teaching_research (teacher_user_id, title, content, category, performance_score, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    const categories = ["教研论文", "课堂改进", "班主任管理", "课程设计"];
+    for (let i = 1; i <= 72; i += 1) {
+      const teacherId = i % 3 === 0 ? headChenId : i % 2 === 0 ? teacherWuId : teacherZhangId;
+      researchStmt.run(
+        teacherId,
+        `教研成果 #${i}`,
+        `围绕第${i}次教学实践形成改进结论：通过分层目标与过程反馈，课堂达成度持续提升。`,
+        categories[i % categories.length],
+        Number((78 + (i % 20) + (i % 5) * 0.6).toFixed(1)),
+        dayjs().subtract(i % 40, "day").toISOString()
+      );
+    }
+  }
+
+  const inviteStmt = db.prepare(
+    `INSERT OR IGNORE INTO invite_codes (code, role, expires_at, used, created_at)
      VALUES (?, ?, ?, 0, ?)`
-    );
+  );
 
-    inviteStmt.run("INVITE-TEACHER-2026", ROLES.TEACHER, dayjs().add(90, "day").toISOString(), dayjs().toISOString());
-    inviteStmt.run("INVITE-PARENT-2026", ROLES.PARENT, dayjs().add(90, "day").toISOString(), dayjs().toISOString());
-    inviteStmt.run("INVITE-STUDENT-2026", ROLES.STUDENT, dayjs().add(90, "day").toISOString(), dayjs().toISOString());
+  inviteStmt.run("INVITE-TEACHER-2026", ROLES.TEACHER, dayjs().add(90, "day").toISOString(), dayjs().toISOString());
+  inviteStmt.run("INVITE-HEAD-2026", ROLES.HEAD_TEACHER, dayjs().add(90, "day").toISOString(), dayjs().toISOString());
+  inviteStmt.run("INVITE-PARENT-2026", ROLES.PARENT, dayjs().add(90, "day").toISOString(), dayjs().toISOString());
+  inviteStmt.run("INVITE-STUDENT-2026", ROLES.STUDENT, dayjs().add(90, "day").toISOString(), dayjs().toISOString());
+  void adminId;
+  void headChenId;
+  void student002Id;
 };
 
 export const initDatabase = (): void => {
