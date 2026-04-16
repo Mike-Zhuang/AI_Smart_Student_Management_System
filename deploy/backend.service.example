@@ -1,0 +1,16 @@
+[Unit]
+Description=Management Assistant Backend Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/management-system/apps/backend
+Environment=PORT=4000
+Environment=JWT_SECRET=change-me
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

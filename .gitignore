@@ -1,0 +1,35 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+.vite/
+coverage/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Runtime data
+apps/backend/data/*.db
+apps/backend/data/*.sqlite
+apps/backend/data/*.sqlite3
+apps/backend/storage/
+apps/backend/uploads/
+
+# OS / editor
+.DS_Store
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log

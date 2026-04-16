@@ -1,0 +1,96 @@
+import { FormEvent, useState } from "react";
+import { apiRequest } from "../lib/api";
+
+const SAMPLE_STUDENT_JSON = `[
+  {
+    "studentNo": "S2026999",
+    "name": "示例学生",
+    "grade": "高一",
+    "className": "高一(3)班",
+    "subjectCombination": "物理+化学+生物",
+    "interests": "编程;机器人",
+    "careerGoal": "人工智能工程师"
+  }
+]`;
+
+const SAMPLE_EXAM_JSON = `[
+  {
+    "studentNo": "S2026999",
+    "examName": "2026学年第一学期期中",
+    "examDate": "2026-11-18",
+    "subject": "数学",
+    "score": 88
+  }
+]`;
+
+export const DataImportPanel = () => {
+  const [studentJson, setStudentJson] = useState(SAMPLE_STUDENT_JSON);
+  const [examJson, setExamJson] = useState(SAMPLE_EXAM_JSON);
+  const [result, setResult] = useState("");
+  const [error, setError] = useState("");
+
+  const importStudents = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const rows = JSON.parse(studentJson) as unknown[];
+      const response = await apiRequest<{ imported: number }>("/api/data-import/students", {
+        method: "POST",
+        body: JSON.stringify({ rows })
+      });
+      setResult(`学生导入成功: ${response.data.imported} 条`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入失败");
+    }
+  };
+
+  const importExams = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const rows = JSON.parse(examJson) as unknown[];
+      const response = await apiRequest<{ imported: number }>("/api/data-import/exam-results", {
+        method: "POST",
+        body: JSON.stringify({ rows })
+      });
+      setResult(`成绩导入成功: ${response.data.imported} 条`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入失败");
+    }
+  };
+
+  return (
+    <section className="panel-grid">
+      <article className="panel-card wide">
+        <h3>真实数据导入模板（后期可替换模拟数据）</h3>
+        <p>
+          后端已内置模板字段，并提供 CSV 模板文件：
+          apps/backend/templates/students-template.csv 与 apps/backend/templates/exam-results-template.csv。
+        </p>
+      </article>
+
+      <article className="panel-card wide">
+        <h4>导入学生基础数据（JSON）</h4>
+        <form onSubmit={importStudents} className="form-stack">
+          <textarea rows={10} value={studentJson} onChange={(event) => setStudentJson(event.target.value)} />
+          <button className="primary-btn" type="submit">
+            导入学生
+          </button>
+        </form>
+      </article>
+
+      <article className="panel-card wide">
+        <h4>导入考试成绩（JSON）</h4>
+        <form onSubmit={importExams} className="form-stack">
+          <textarea rows={10} value={examJson} onChange={(event) => setExamJson(event.target.value)} />
+          <button className="primary-btn" type="submit">
+            导入成绩
+          </button>
+        </form>
+      </article>
+
+      {result ? <p className="success-text">{result}</p> : null}
+      {error ? <p className="error-text">{error}</p> : null}
+    </section>
+  );
+};

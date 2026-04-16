@@ -1,0 +1,30 @@
+Management Assistant System License
+Copyright (c) 2026 Zhuang Chengbo
+
+This repository uses a dual-license model:
+
+1) Source code license (all files under apps/, deploy/, scripts or other executable code)
+   PolyForm Noncommercial License 1.0.0
+   https://polyformproject.org/licenses/noncommercial/1.0.0/
+
+   Core terms summary:
+   - Noncommercial use only.
+   - You may use, copy, modify, and distribute for noncommercial purposes.
+   - Commercial use requires separate written permission from the copyright holder.
+
+2) Documentation and presentation assets (README, GUIDE, docs/, report materials, screenshots, demo scripts)
+   Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+   https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+   Core terms summary:
+   - Attribution is required.
+   - Noncommercial use only.
+   - Derivative documents must use the same license.
+
+Additional restrictions and notices:
+- Any direct or indirect commercial use (including paid SaaS, paid training, paid consulting bundles, or resale) is prohibited without prior written authorization by Zhuang Chengbo.
+- This project is intended for educational demonstration, research, and noncommercial institutional preview.
+- By using this repository, you agree to the above dual-license terms.
+
+For commercial licensing requests:
+Please contact the copyright holder: Zhuang Chengbo
