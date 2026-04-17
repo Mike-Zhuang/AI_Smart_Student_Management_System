@@ -2,6 +2,7 @@ import { Router } from "express";
 import dayjs from "dayjs";
 import { z } from "zod";
 import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
+import { getSupportedModelById } from "../constants.js";
 import { db } from "../db.js";
 import { canAccessStudent, requireAuth } from "../middleware/auth.js";
 import { callZhipu } from "../services/zhipu.js";
@@ -142,15 +143,28 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req, res) => 
 
     const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
 
+    const modelMeta = getSupportedModelById(input.model);
+    if (!modelMeta) {
+        res.status(400).json({ success: false, message: "不支持的模型" });
+        return;
+    }
+
+    if (template.outputFormat === "json_object" && !modelMeta.supportsJsonMode) {
+        res.status(400).json({ success: false, message: `模型 ${modelMeta.name} 不支持结构化输出` });
+        return;
+    }
+
     let answer = "";
     try {
-        answer = await callZhipu({
+        const result = await callZhipu({
             apiKey: input.apiKey,
             model: input.model,
             prompt,
             systemPrompt: template.systemPrompt,
-            enableThinking: input.model.includes("thinking") || input.model === "glm-4.7-flash"
+            responseFormat: template.outputFormat,
+            enableThinking: modelMeta.thinking
         });
+        answer = result.content;
     } catch (error) {
         const reason = error instanceof Error ? error.message : "未知错误";
         res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });

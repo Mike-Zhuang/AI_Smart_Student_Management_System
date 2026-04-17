@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
 import { downloadExport } from "../lib/export";
 import { storage } from "../lib/storage";
@@ -28,6 +29,7 @@ type Analytics = {
 };
 
 export const TeachingPanel = ({ user }: { user: User }) => {
+    const navigate = useNavigate();
     const [tasks, setTasks] = useState<Task[]>([]);
     const [research, setResearch] = useState<Research[]>([]);
     const [analytics, setAnalytics] = useState<Analytics | null>(null);
@@ -140,6 +142,9 @@ export const TeachingPanel = ({ user }: { user: User }) => {
                         />
                     </label>
                     <p>{user.role === "head_teacher" ? "你当前是班主任角色，可联动班级治理任务。" : "你当前是教师角色，重点优化教学与教研任务。"}</p>
+                    <button className="secondary-btn" type="button" onClick={() => navigate("/dashboard/ai-lab?scenario=teaching")}>
+                        进入AI聊天
+                    </button>
                 </div>
             </article>
 

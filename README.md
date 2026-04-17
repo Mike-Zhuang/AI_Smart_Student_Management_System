@@ -226,5 +226,5 @@ pnpm build
 - 代码：PolyForm Noncommercial 1.0.0
 - 文档与演示材料：CC BY-NC-SA 4.0
 
-版权归属：Zhuang Chengbo
+版权归属：Sun Jiantong
 未经授权禁止商用。

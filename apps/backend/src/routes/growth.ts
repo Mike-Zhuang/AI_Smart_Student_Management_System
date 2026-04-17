@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
+import { getSupportedModelById } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, canAccessStudent } from "../middleware/auth.js";
 import { callZhipu } from "../services/zhipu.js";
@@ -157,13 +158,25 @@ growthRouter.post("/students/:studentId/ai-diagnosis", requireAuth, async (req: 
 
     const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
 
+    const modelMeta = getSupportedModelById(parsed.data.model);
+    if (!modelMeta) {
+        res.status(400).json({ success: false, message: "不支持的模型" });
+        return;
+    }
+
+    if (template.outputFormat === "json_object" && !modelMeta.supportsJsonMode) {
+        res.status(400).json({ success: false, message: `模型 ${modelMeta.name} 不支持结构化输出` });
+        return;
+    }
+
     try {
-        const answer = await callZhipu({
+        const result = await callZhipu({
             apiKey: parsed.data.apiKey,
             model: parsed.data.model,
             prompt,
             systemPrompt: template.systemPrompt,
-            enableThinking: parsed.data.model.includes("thinking") || parsed.data.model === "glm-4.7-flash"
+            responseFormat: template.outputFormat,
+            enableThinking: modelMeta.thinking
         });
 
         logAudit({
@@ -181,7 +194,7 @@ growthRouter.post("/students/:studentId/ai-diagnosis", requireAuth, async (req: 
             message: "分析完成",
             data: {
                 studentId,
-                answer
+                answer: result.content
             }
         });
     } catch (error) {

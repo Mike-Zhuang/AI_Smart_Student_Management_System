@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiRequest } from "../lib/api";
 import { storage } from "../lib/storage";
@@ -38,6 +39,7 @@ type Alert = {
 };
 
 export const GrowthPanel = ({ user }: { user: User }) => {
+    const navigate = useNavigate();
     const [students, setStudents] = useState<Student[]>([]);
     const [studentId, setStudentId] = useState<number | null>(user.linkedStudentId);
     const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -148,6 +150,9 @@ export const GrowthPanel = ({ user }: { user: User }) => {
                         }}
                     >
                         AI风险诊断
+                    </button>
+                    <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=growth")}>
+                        进入AI聊天
                     </button>
                 </div>
             </article>

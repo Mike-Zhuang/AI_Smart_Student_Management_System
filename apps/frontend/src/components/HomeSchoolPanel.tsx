@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
 import { downloadExport } from "../lib/export";
 import { storage } from "../lib/storage";
@@ -25,6 +26,7 @@ type LeaveItem = {
 };
 
 export const HomeSchoolPanel = ({ user }: { user: User }) => {
+    const navigate = useNavigate();
     const [messages, setMessages] = useState<MessageItem[]>([]);
     const [leaves, setLeaves] = useState<LeaveItem[]>([]);
     const [error, setError] = useState("");
@@ -142,6 +144,11 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                 <article className="panel-card wide">
                     <h3>家校消息中心</h3>
                     <p>当前身份可查看通知与请假状态，不支持主动群发消息。</p>
+                    <div className="section-actions">
+                        <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=home-school")}>
+                            进入AI聊天
+                        </button>
+                    </div>
                 </article>
             )}
 

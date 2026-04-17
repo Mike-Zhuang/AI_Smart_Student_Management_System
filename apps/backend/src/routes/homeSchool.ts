@@ -2,7 +2,7 @@ import { Router } from "express";
 import dayjs from "dayjs";
 import { z } from "zod";
 import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
-import { ROLES } from "../constants.js";
+import { getSupportedModelById, ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { callZhipu } from "../services/zhipu.js";
@@ -314,13 +314,25 @@ homeSchoolRouter.post(
         const parentMessage = `标题: ${message.title}\n内容: ${message.content}\n发送人: ${message.senderName ?? "家长"}`;
         const prompt = `${fillTemplate(template.template, { parentMessage })}\n\n输出规范:\n${template.outputSpec}`;
 
+        const modelMeta = getSupportedModelById(parsed.data.model);
+        if (!modelMeta) {
+            res.status(400).json({ success: false, message: "不支持的模型" });
+            return;
+        }
+
+        if (template.outputFormat === "json_object" && !modelMeta.supportsJsonMode) {
+            res.status(400).json({ success: false, message: `模型 ${modelMeta.name} 不支持结构化输出` });
+            return;
+        }
+
         try {
-            const answer = await callZhipu({
+            const result = await callZhipu({
                 apiKey: parsed.data.apiKey,
                 model: parsed.data.model,
                 prompt,
                 systemPrompt: template.systemPrompt,
-                enableThinking: parsed.data.model.includes("thinking") || parsed.data.model === "glm-4.7-flash"
+                responseFormat: template.outputFormat,
+                enableThinking: modelMeta.thinking
             });
 
             logAudit({
@@ -333,7 +345,7 @@ homeSchoolRouter.post(
                 ipAddress: extractIp(req)
             });
 
-            res.json({ success: true, message: "生成成功", data: { messageId, draft: answer } });
+            res.json({ success: true, message: "生成成功", data: { messageId, draft: result.content } });
         } catch (error) {
             const reason = error instanceof Error ? error.message : "未知错误";
             res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });

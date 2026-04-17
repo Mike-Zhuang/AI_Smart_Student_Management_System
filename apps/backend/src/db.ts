@@ -194,6 +194,33 @@ const createSchema = (): void => {
       created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
+
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT,
+            scenario TEXT,
+            model TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            reasoning_content TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated_at
+            ON chat_sessions(user_id, updated_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created_at
+            ON chat_messages(session_id, created_at ASC);
   `);
 };
 
@@ -576,6 +603,24 @@ const seedDemoData = (): void => {
 
 export const initDatabase = (): void => {
     createSchema();
+
+    const chatMessageColumns = db
+        .prepare(`PRAGMA table_info(chat_messages)`)
+        .all() as Array<{ name: string }>;
+    const hasReasoningColumn = chatMessageColumns.some((item) => item.name === "reasoning_content");
+    if (!hasReasoningColumn) {
+        db.exec(`ALTER TABLE chat_messages ADD COLUMN reasoning_content TEXT`);
+    }
+
     seedPublicData();
     seedDemoData();
+
+    const expireBefore = dayjs().subtract(7, "day").toISOString();
+    db.prepare(
+        `DELETE FROM chat_messages
+         WHERE session_id IN (
+            SELECT id FROM chat_sessions WHERE updated_at < ?
+         )`
+    ).run(expireBefore);
+    db.prepare(`DELETE FROM chat_sessions WHERE updated_at < ?`).run(expireBefore);
 };

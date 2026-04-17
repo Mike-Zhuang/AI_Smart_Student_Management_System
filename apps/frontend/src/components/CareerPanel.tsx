@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
 import { downloadExport } from "../lib/export";
 import { storage } from "../lib/storage";
@@ -41,6 +42,7 @@ type MajorRow = {
 };
 
 export const CareerPanel = ({ user }: { user: User }) => {
+    const navigate = useNavigate();
     const [students, setStudents] = useState<Student[]>([]);
     const [studentId, setStudentId] = useState<number | null>(null);
     const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -172,6 +174,9 @@ export const CareerPanel = ({ user }: { user: User }) => {
                         onClick={() => void downloadExport("/api/admin/export/module/career-recommendations", "career-recommendations")}
                     >
                         导出推荐记录
+                    </button>
+                    <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=career")}>
+                        进入AI聊天
                     </button>
                 </div>
             </article>
