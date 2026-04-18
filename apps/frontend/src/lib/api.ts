@@ -1,13 +1,25 @@
 import { storage } from "./storage";
 import type { ApiEnvelope } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000").trim();
+
+const buildRequestUrl = (path: string): string => {
+  const normalizedBase = API_BASE.replace(/\/+$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+  if (normalizedBase.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${normalizedBase}${normalizedPath.slice(4)}`;
+  }
+
+  return `${normalizedBase}${normalizedPath}`;
+};
 
 type RequestInitEx = RequestInit & { skipAuth?: boolean };
 
 export async function apiRequest<T>(path: string, init: RequestInitEx = {}): Promise<ApiEnvelope<T>> {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
+  const requestUrl = buildRequestUrl(path);
 
   if (!init.skipAuth) {
     const token = storage.getToken();
@@ -16,12 +28,18 @@ export async function apiRequest<T>(path: string, init: RequestInitEx = {}): Pro
     }
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(requestUrl, {
     ...init,
     headers
   });
 
-  const body = (await response.json()) as ApiEnvelope<T>;
+  const raw = await response.text();
+  let body: ApiEnvelope<T>;
+  try {
+    body = JSON.parse(raw) as ApiEnvelope<T>;
+  } catch {
+    throw new Error(response.ok ? "服务返回格式异常" : "请求失败，请检查服务配置");
+  }
 
   if (!response.ok || !body.success) {
     throw new Error(body.message || "请求失败");

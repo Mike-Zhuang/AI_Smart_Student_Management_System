@@ -17,6 +17,7 @@ export const RegisterPage = () => {
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -61,12 +62,23 @@ export const RegisterPage = () => {
           </label>
           <label>
             密码
-            <input
-              type="password"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
-              required
-            />
+            <div className="password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                autoComplete="new-password"
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+              >
+                {showPassword ? "隐藏" : "显示"}
+              </button>
+            </div>
           </label>
           <label>
             邀请码

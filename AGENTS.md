@@ -142,3 +142,59 @@
     - `glm-4.7-flash` 调用成功，且返回思考链字段。
     - `glm-5.1` 调用成功，且返回思考链字段。
     - 模板接口返回 `requiresJsonMode=true`，前端可据此做模型过滤。
+
+## 2026-04-18 13:16:47 +0800
+
+- 新增 AI 工程方法文档：`docs/how-to-build-with-ai-from-zero.md`。
+- 文档内容聚焦“如何从 0 到 1 指挥 AI 生成完整项目”，覆盖：
+  - 聊天式 AI 与工程式 AI 的能力差异。
+  - Ask/Plan/Agent 模式分工与 Plan 模式实操流程。
+  - 需求结构化输入、BigModel 官方文档约束、防幻觉策略。
+  - 前端设计规范先行（基于 `DESIGN.md`）与避免模板化审美。
+  - 前后端分离与 API 契约先行。
+  - GitHub 里程碑提交与私有仓库策略。
+  - 可复用的 Plan 输入模板与“指挥 AI 干活”执行清单。
+
+## 2026-04-18 14:18:59 +0800
+
+- 完成服务器 `47.116.199.144` 的 `management-system` 部署主链路（目标端口 `8082`）：
+  - 从 `gh-proxy` 拉取公开仓库 `AI_Smart_Student_Management_System` 到 `/opt/management-system`。
+  - 服务器端执行 `npm ci` 与 `npm run build`，生成前后端构建产物。
+  - 前端静态资源发布到 `/var/www/management-system/frontend/dist`。
+- 新增后端系统服务：
+  - 创建并启用 `management-system-backend.service`，运行目录 `/opt/management-system/apps/backend`，目标端口 `8002`。
+  - 初始化后端环境文件 `/opt/management-system/apps/backend/.env`（含 `PORT=8002` 与 `JWT_SECRET`）。
+- 新增 Nginx 站点配置：
+  - 写入 `/www/server/panel/vhost/nginx/management-system.conf`，监听 `8082`。
+  - 配置 `/api` 反向代理到 `127.0.0.1:8002`，其余请求回退 `index.html`。
+- 新增宝塔“网站”记录：
+  - 在宝塔 `sites` 中登记 `management-system`，路径 `/var/www/management-system/frontend/dist`。
+- 新增宝塔“计划任务”自动同步：
+  - 下发 `/usr/local/bin/management-system-sync-deploy.sh`（先验证可用 gitproxy，再拉取/构建/发布/重启）。
+  - 增加任务 `ManagementSystem-自动同步部署`（`minute-n` 每 10 分钟，启用 `flock` 防并发）。
+- 验收结果：
+  - `8080/8081` 现有站点监听保持正常。
+  - `8082` 前端页面可访问。
+  - 后端 `8002` 处于初始化建库阶段，短时仍可能出现健康检查未就绪。
+
+## 2026-04-18 14:22:16 +0800
+
+- 完成部署终态验收收敛：
+  - 后端 `8002` 已开始监听，`GET /health` 返回 `success=true`。
+  - 通过公网验证 `http://47.116.199.144:8082` 可访问前端页面。
+  - 通过宝塔数据表核验：网站记录 `management-system` 与计划任务 `ManagementSystem-自动同步部署` 均已存在。
+
+## 2026-04-18 14:31:57 +0800
+
+- 登录体验与安全性修复：
+  - `apps/frontend/src/pages/LoginPage.tsx` 取消默认预填的 `admin/admin123`，改为首次进入空表单。
+  - 登录页与注册页新增密码“显示/隐藏”切换按钮，并补充浏览器自动填充语义（`autoComplete`）。
+  - `apps/frontend/src/styles.css` 新增密码输入区与切换按钮样式，兼容现有主题。
+- API 请求稳定性增强：
+  - `apps/frontend/src/lib/api.ts` 增加 URL 规范化拼接，自动规避 `VITE_API_BASE_URL=/api` 与路径 `/api/...` 叠加导致的双 `/api/api/...` 问题。
+  - 增加非 JSON 响应兜底报错，避免前端抛出不友好的底层异常。
+- 服务器数据与账号核验：
+  - 核验 `47.116.199.144` 的 `app.db`：`students` 当前为 `1001` 条，演示账号（含 `admin`、`teacher_zhang` 等）存在。
+  - 通过内网与公网入口分别调用 `POST /api/auth/login`，`admin/admin123` 登录成功。
+- 验证结果：
+  - 执行 `npm run build -w @ms/frontend` 通过。

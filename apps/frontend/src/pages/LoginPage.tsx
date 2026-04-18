@@ -8,8 +8,9 @@ import { useAuth } from "../App";
 export const LoginPage = () => {
   const navigate = useNavigate();
   const { setUser } = useAuth();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -44,17 +45,33 @@ export const LoginPage = () => {
         <form onSubmit={onSubmit} className="form-stack">
           <label>
             用户名
-            <input value={username} onChange={(event) => setUsername(event.target.value)} required />
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              required
+            />
           </label>
 
           <label>
             密码
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
+            <div className="password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+              >
+                {showPassword ? "隐藏" : "显示"}
+              </button>
+            </div>
           </label>
 
           {error ? <p className="error-text">{error}</p> : null}

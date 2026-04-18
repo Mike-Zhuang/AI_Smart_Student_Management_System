@@ -153,6 +153,28 @@ textarea:focus {
     color: var(--brand);
 }
 
+.password-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.password-toggle-btn {
+    border: 1px solid var(--border-warm);
+    background: white;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.password-toggle-btn:hover {
+    color: var(--text-primary);
+    border-color: #d7d3c7;
+}
+
 .error-text {
     color: #b53333;
     margin: 0;
