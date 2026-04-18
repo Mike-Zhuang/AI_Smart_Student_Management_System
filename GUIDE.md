@@ -1,252 +1,278 @@
 # GUIDE
 
-本文件是前端与评比演示的详细使用说明（区别于 README 的总览）。
+本文件是面向使用者的操作手册。
 
-## 1. 登录与身份
+如果你是第一次使用，建议先按第 1 节到第 3 节走一遍，再进入对应模块。
 
-### 1.1 登录
+## 1. 首次使用（5 分钟）
 
-1. 打开前端地址 `http://localhost:3000`
-2. 进入登录页
-3. 输入演示账号（见 README）
-4. 登录后进入总览页
+### 1.1 访问系统
 
-### 1.2 邀请码注册
+线上地址：
 
-1. 点击登录页“邀请码注册”
-2. 填写用户名、显示名、密码、邀请码
-3. 家长/学生可填写学号绑定（可选）
-4. 注册后自动登录
+- http://47.116.199.144:8082
 
-## 2. 系统导航
+本地开发地址：
 
-左侧导航包含以下模块：
+- 前端：http://localhost:3000
+- 后端：http://localhost:4000
+
+### 1.2 登录账号
+
+推荐先使用管理员账号完整体验：
+
+- admin / admin123
+
+首次进入登录页说明：
+
+- 默认不再自动填充账号密码
+- 支持密码显示/隐藏切换
+
+### 1.3 快速演示路径（建议）
+
+1. 总览看学生规模与系统状态
+2. 家校沟通发一条通知并查看回执
+3. 生涯选课生成一次推荐并看可解释面板
+4. 学业成长查看趋势图与预警
+5. 教研管理新增任务并查看统计
+6. AI 助手中心用模板发起一次场景分析
+7. 导出审计日志或证据包
+
+## 2. 角色说明
+
+### 2.1 管理员 admin
+
+- 全部模块可见
+- 可查看审计日志并导出证据包
+
+### 2.2 教师 teacher
+
+- 家校沟通、生涯选课、学业成长、教研管理、AI 助手中心
+
+### 2.3 班主任 head_teacher
+
+- 教师权限 + 班主任工作台 + 更完整班级治理视图
+
+### 2.4 家长 parent
+
+- 家校沟通、学业成长（关联学生）、AI 助手中心
+
+### 2.5 学生 student
+
+- 个人相关学习视图与 AI 助手功能
+
+## 3. 页面与导航
+
+左侧菜单默认包含：
 
 1. 总览
 2. 家校沟通
 3. 生涯选课
 4. 学业成长
-5. 班主任工作台（管理员/班主任）
-6. 教研管理
-7. 智谱模型
-8. 数据导入
+5. 班主任工作台（仅管理员/班主任）
+6. 教研管理（教师相关角色）
+7. AI 助手中心
+8. 数据导入（管理员/班主任）
 
-## 3. 模块详解
+## 4. 模块操作指南
 
-## 3.1 总览
+## 4.1 总览
 
-目标：快速展示系统运行状态。
+你会看到：
 
-功能：
+- 当前角色与欢迎信息
+- 学生规模与关键统计
+- 管理员可见导出入口（审计/证据包）
 
-- 展示当前角色
-- 展示学生规模
-- 管理员可查看账号角色分布与消息总量
-- 管理员可导出审计日志与评比证据包
+常用接口：
 
-实现来源：
+- GET /api/admin/system-overview
+- GET /api/students
 
-- `/api/admin/system-overview`
-- `/api/students`
+## 4.2 家校沟通
 
-## 3.2 家校沟通
+推荐操作顺序：
 
-目标：实现消息传达、请假审批、闭环沟通。
+1. 发送消息
+2. 查看消息列表
+3. 标记已读回执
+4. 查看或审批请假
+5. 导出消息与请假记录
 
-功能：
+常用接口：
 
-1. 消息发送
-- 选择接收角色（家长/学生/教师/班主任）
-- 填写标题与正文并发送
+- GET /api/home-school/messages
+- POST /api/home-school/messages
+- PATCH /api/home-school/messages/:id/read
+- GET /api/home-school/leave-requests
+- PATCH /api/home-school/leave-requests/:id/review
 
-2. 消息查看
-- 按角色权限查看最新消息
-- 显示发送人和发送时间
-- 支持“标记已读”形成回执闭环
+## 4.3 生涯选课
 
-3. 请假审批
-- 查看请假记录
-- 执行同意/驳回
+推荐操作顺序：
 
-4. 导出取证
-- 导出消息记录
-- 导出请假记录
-
-实现来源：
-
-- `GET /api/home-school/messages`
-- `POST /api/home-school/messages`
-- `GET /api/home-school/leave-requests`
-- `PATCH /api/home-school/leave-requests/:id/review`
-- `PATCH /api/home-school/messages/:id/read`
-- `GET /api/admin/export/module/messages`
-- `GET /api/admin/export/module/leave-requests`
-
-## 3.3 生涯规划与选课
-
-目标：依据学业数据生成选科建议并映射专业方向。
-
-功能：
-
-1. 选学生
-2. 选模型（智谱）
+1. 选择学生
+2. 选择模型并填写 API Key
 3. 点击生成建议
 4. 查看推荐历史
-5. 查看推荐理由可解释面板（维度分、证据链、反事实）
-6. 查看公开专业选科要求表
-7. 导出推荐记录
+5. 查看可解释面板（维度分、证据链、反事实）
+6. 导出推荐记录
 
-实现来源：
+常用接口：
 
-- `GET /api/students`
-- `POST /api/career/recommendations/generate`
-- `GET /api/career/recommendations/:studentId`
-- `GET /api/career/public-data/major-requirements`
-- `GET /api/admin/export/module/career-recommendations`
+- POST /api/career/recommendations/generate
+- GET /api/career/recommendations/:studentId
+- GET /api/career/public-data/major-requirements
 
-## 3.4 学业成长追踪
+## 4.4 学业成长
 
-目标：完成学生画像、趋势分析、风险预警。
+推荐操作顺序：
 
-功能：
+1. 选择学生
+2. 查看成长画像与风险等级
+3. 查看考试趋势图
+4. 查看预警记录
+5. 需要时跳转 AI 助手做诊断
 
-1. 学生切换
-2. 成长画像查看（风险等级 + 个性建议）
-3. 考试均分趋势图（Recharts）
-4. 预警记录查看
+常用接口：
 
-实现来源：
+- GET /api/growth/students/:studentId/profile
+- GET /api/growth/students/:studentId/trends
+- GET /api/growth/students/:studentId/alerts
 
-- `GET /api/growth/students/:studentId/profile`
-- `GET /api/growth/students/:studentId/trends`
-- `GET /api/growth/students/:studentId/alerts`
+## 4.5 教学教研管理
 
-## 3.5 教师教学教研管理
+推荐操作顺序：
 
-目标：实现任务分配、成果归集、绩效分析。
+1. 新建任务（备课/教研/沟通/培训）
+2. 查看任务状态与截止时间
+3. 查看教研成果与绩效统计
+4. 导出任务记录用于评比材料
 
-功能：
+常用接口：
 
-1. 创建任务（备课/教研/沟通/培训）
-2. 任务列表
-3. 教研成果表
-4. 统计卡片（状态统计、平均绩效）
-5. 任务记录导出
+- GET /api/teaching/tasks
+- POST /api/teaching/tasks
+- GET /api/teaching/research
+- GET /api/teaching/analytics
 
-实现来源：
+## 4.6 班主任工作台
 
-- `GET /api/teaching/tasks`
-- `POST /api/teaching/tasks`
-- `GET /api/teaching/research`
-- `GET /api/teaching/analytics`
-- `GET /api/admin/export/module/teaching-tasks`
+推荐操作顺序：
 
-## 3.6 班主任工作台
+1. 选择班级
+2. 查看待办漏斗（请假、预警、回执、任务）
+3. 查看风险学生清单
+4. 查看最近审计轨迹
+5. 导出证据包
 
-目标：给班主任提供日常管理的细颗粒决策视图。
+常用接口：
 
-功能：
+- GET /api/teaching/head-teacher/workbench
+- GET /api/admin/export/evidence-report
 
-1. 班级筛选
-2. 待办漏斗（请假待审/预警待跟进/教学待办/家长待回执）
-3. 风险学生清单
-4. 最近审计轨迹
-5. 导出评比证据包
+## 4.7 AI 助手中心
 
-实现来源：
+推荐操作顺序：
 
-- `GET /api/teaching/head-teacher/workbench`
-- `GET /api/admin/export/evidence-report`
-
-## 3.7 智谱模型实验室
-
-目标：提供统一模型切换与调用体验。
-
-功能：
-
-1. 填写 API Key（本地存储）
+1. 输入 API Key（仅本地浏览器保存）
 2. 选择模型
-- GLM-4.7-Flash（文本思考）
-- GLM-4.1V-Thinking-Flash（多模态思考）
-- GLM-4.6V-Flash（多模态快速）
-3. 选择业务场景模板（生涯/成长/家校/教研）
-4. 填写模板变量 JSON 或自定义提示词
-5. 查看模型输出
-
-实现来源：
-
-- `GET /api/ai/models`
-- `POST /api/ai/chat`
-- `GET /api/ai/prompt-templates`
-- `POST /api/ai/chat-with-template`
+3. 选择业务场景模板
+4. 填写模板变量或自定义提示词
+5. 发送后在同一会话继续追问
+6. 结构化输出会自动转成易读字段
 
 说明：
 
-- API Key 不在后端持久化，仅调用时透传。
-- 若请求多模态输入但模型不支持，后端会拒绝并提示。
+- 模板模式会根据输出类型自动筛选兼容模型
+- 若模型返回思考链，可在界面折叠查看
 
-## 3.8 数据导入
+常用接口：
 
-目标：为后期替换真实学校数据提供标准入口。
+- GET /api/ai/models
+- GET /api/ai/prompt-templates
+- GET /api/ai/conversations
+- POST /api/ai/chat
+- POST /api/ai/chat-with-template
 
-功能：
+## 4.8 数据导入
 
-1. 学生数据 JSON 导入
-2. 成绩数据 JSON 导入
-3. 对应 CSV 模板说明
+建议先做小样本导入再全量导入。
+
+操作建议：
+
+1. 下载模板并按字段整理数据
+2. 先导入 10 条以内验证格式
+3. 再执行批量导入
+4. 导入后抽样核对页面显示
 
 模板文件：
 
-- `apps/backend/templates/students-template.csv`
-- `apps/backend/templates/exam-results-template.csv`
+- apps/backend/templates/students-template.csv
+- apps/backend/templates/exam-results-template.csv
+- apps/backend/templates/teachers-template.csv
 
-实现来源：
+常用接口：
 
-- `POST /api/data-import/students`
-- `POST /api/data-import/exam-results`
+- POST /api/data-import/students
+- POST /api/data-import/exam-results
+- POST /api/data-import/teachers
 
-## 4. 前端视觉实现说明（对应 DESIGN.md）
+## 5. 评比演示建议
 
-当前已落地：
+推荐在 8 分钟内演示以下闭环：
 
-1. 暖色背景与纸张感层次（parchment + ivory）
-2. Serif 标题 + Sans UI 的分工
-3. ring shadow 与柔和阴影
-4. 大圆角卡片
-5. 页面渐进动画
-6. 移动端单列响应式
+1. 登录并展示角色化导航
+2. 业务数据查询与 AI 辅助决策
+3. 管理动作（审批、任务、预警）
+4. 审计日志与证据导出
 
-核心实现文件：
+详细脚本见 docs/defense-demo-script.md。
 
-- `apps/frontend/src/styles.css`
+## 6. 常见问题与排障
 
-## 5. 演示脚本建议（8分钟）
+### 6.1 登录失败：无法连接服务器
 
-详见 `docs/defense-demo-script.md`，该文档包含：
+请按顺序检查：
 
-1. 分秒级答辩讲稿
-2. 可直接照做的操作路径
-3. 评比证据导出清单
+1. 是否访问正确地址 http://47.116.199.144:8082
+2. 浏览器请求是否指向 /api（而非 localhost:4000）
+3. 后端健康检查是否返回 success
 
-## 6. 评比注意事项
+### 6.2 控制台提示 runtime.connect 错误
 
-1. 涉及 AI 文本/图像输出需标注“AI生成”
-2. 保护学生隐私，不展示真实敏感个人信息
-3. 演示中强调真实问题与解决效果
-4. 提供可复现步骤与模板
+一般是浏览器扩展引发，与系统后端无关。处理方式：
 
-## 7. 常见问题
+1. 用无痕模式重试
+2. 暂时禁用扩展重试
 
-1. 为什么调用模型失败？
-- 检查 API Key
-- 检查模型名称是否正确
-- 检查网络是否可访问智谱接口
+### 6.3 页面提示 The string did not match the expected pattern
 
-2. 为什么部分模块显示无权限？
-- 不同角色默认权限不同
-- 可使用管理员账号验证全功能
+通常是浏览器对输入格式或跨域请求触发的底层报错，请优先检查：
 
-3. 如何接入真实数据？
-- 先按模板整理数据
-- 使用数据导入接口写入
-- 再做小范围脱敏验证
+1. 登录页是否已更新为最新版本
+2. 前端是否仍缓存旧 JS
+3. 网络请求是否返回了非 JSON 异常页
+
+### 6.4 AI 调用失败
+
+请检查：
+
+1. API Key 是否有效
+2. 模型是否支持当前模板输出类型
+3. 网络是否可访问智谱服务
+
+## 7. 附录：关键接口清单
+
+认证与用户：
+
+- POST /api/auth/login
+- POST /api/auth/register
+- GET /api/auth/demo-accounts
+
+导出与审计：
+
+- GET /api/admin/audit-logs
+- GET /api/admin/export/audit-logs
+- GET /api/admin/export/module/:module
+- GET /api/admin/export/evidence-report

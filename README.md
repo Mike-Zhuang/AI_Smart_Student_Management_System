@@ -1,78 +1,57 @@
-# 高中AI管理辅助系统（评比演示版 + 深度功能版）
+# 高中AI管理辅助系统
 
-本项目面向中国大陆高中场景，围绕以下四大系统一次性提供完整实现：
+一个面向高中场景的一体化管理与决策辅助平台，包含四大核心业务系统，并内置国产大模型能力。
+
+适合场景：
+
+- 学校内部演示与试点
+- 创AI案例评比答辩
+- 小规模上线与持续迭代
+
+## 1. 你可以先看这里
+
+如果你是第一次接触本项目，按下面顺序阅读即可：
+
+1. 本文档第 3 节：3 分钟快速上手
+2. 本文档第 4 节：演示账号与角色
+3. GUIDE.md：按角色、按模块的详细操作手册
+
+如果你已经部署到服务器，默认线上入口为：
+
+- 前端页面：http://47.116.199.144:8082
+- 后端健康检查：http://47.116.199.144:8082/health
+
+## 2. 系统能力总览
+
+### 2.1 四大业务系统
 
 1. 家校沟通系统
 2. 生涯规划与选课系统
-3. 学生学业成长追踪管理系统
-4. 教师教学教研管理系统
+3. 学业成长追踪系统
+4. 教学教研管理系统
 
-并支持国产大模型智谱接入（前端可填 API Key + 模型切换）。
+### 2.2 AI 助手中心
 
-## 1. 项目定位
+- 支持智谱模型切换
+- 支持模板化业务场景（生涯、成长、家校、教研）
+- 支持会话历史、上下文续聊、结构化输出渲染
 
-- 目标场景：创AI案例评比与小范围预览
-- 架构形态：前后端分离
-- 部署策略：轻量裸机部署（非 Docker）
-- 数据策略：公开教育数据 + 高可信模拟数据 + 后期真实数据模板导入
+### 2.3 管理与取证能力
 
-## 2. 技术架构
+- 审计日志查询与导出
+- 模块级数据导出
+- 评比证据包导出
+- 班主任工作台
 
-### 前端
+## 3. 3 分钟快速上手
 
-- React 18 + TypeScript + Vite
-- Recharts 可视化
-- 设计风格严格参考 DESIGN.md（暖色纸张感、Serif 标题、Ring Shadow）
-
-### 后端
-
-- Node.js + Express + TypeScript
-- SQLite（better-sqlite3）
-- JWT 认证 + RBAC 角色权限
-- 邀请码注册机制
-
-### 智谱模型接入
-
-- GLM-4.7-Flash
-- GLM-4.1V-Thinking-Flash
-- GLM-4.6V-Flash
-
-后端统一网关代理，前端可选择模型并传入 API Key。
-
-## 3. 目录结构
-
-```text
-.
-├── apps
-│   ├── backend
-│   │   ├── src
-│   │   │   ├── routes
-│   │   │   ├── middleware
-│   │   │   ├── services
-│   │   │   └── utils
-│   │   ├── templates
-│   │   └── data
-│   └── frontend
-│       └── src
-│           ├── components
-│           ├── pages
-│           └── lib
-├── deploy
-├── docs
-├── GUIDE.md
-├── LICENSE
-└── README.md
-```
-
-## 4. 快速启动
-
-### 环境要求
+### 3.1 环境要求
 
 - Node.js >= 20
 - npm >= 10
 - pnpm >= 9（可选）
 
-### 安装依赖
+### 3.2 安装依赖
 
 ```bash
 npm install
@@ -80,7 +59,7 @@ npm install
 pnpm install
 ```
 
-### 启动开发环境
+### 3.3 启动开发环境
 
 ```bash
 npm run dev
@@ -90,20 +69,15 @@ pnpm dev
 
 默认地址：
 
-- 前端: http://localhost:3000
-- 后端: http://localhost:4000
+- 前端：http://localhost:3000
+- 后端：http://localhost:4000
 
-### 单独启动
+说明：
 
-```bash
-npm run dev:backend
-npm run dev:frontend
-# 或
-pnpm dev:backend
-pnpm dev:frontend
-```
+- 前端默认通过同源 /api 访问后端。
+- 本地开发时 Vite 已内置 /api -> http://localhost:4000 代理。
 
-### 构建
+### 3.4 构建生产版本
 
 ```bash
 npm run build
@@ -111,15 +85,17 @@ npm run build
 pnpm build
 ```
 
-### VS Code 本地全栈调试
+### 3.5 VS Code 调试
 
-项目已提供 `.vscode` 调试配置，可直接在 VS Code 里启动前后端调试链路：
+项目已提供 .vscode 调试配置：
 
-- `Full Stack Debug`：同时启动后端与前端开发服务
-- `Debug Backend Only`：仅调试后端 API
-- `Debug Frontend (Manual Browser)`：手动打开浏览器后附加调试（不自动拉起浏览器）
+- Full Stack Debug：同时启动前后端
+- Debug Backend Only：仅后端
+- Debug Frontend (Manual Browser)：仅前端并手动打开浏览器
 
-## 5. 演示账号
+## 4. 演示账号与角色
+
+可直接用于演示：
 
 - admin / admin123
 - teacher_zhang / teacher123
@@ -127,72 +103,56 @@ pnpm build
 - parent_wang / parent123
 - student_001 / student123
 
-## 6. 四大模块说明
+角色权限说明：
 
-### 6.1 家校沟通
+- admin：全功能
+- teacher：教学教研、家校沟通、成长查看、选课建议
+- head_teacher：班主任工作台 + 教师能力
+- parent：家校沟通、孩子成长查看
+- student：个人学习相关视图
 
-- 消息中心与通知推送
-- 请假申请与审批闭环
-- 家长消息反馈与回执追踪（已读标记）
-- 支持消息/请假记录导出
+## 5. 项目结构
 
-### 6.2 生涯规划与选课
+```text
+.
+├── apps
+│   ├── backend
+│   │   ├── src
+│   │   ├── templates
+│   │   └── data
+│   └── frontend
+│       └── src
+├── deploy
+├── docs
+├── GUIDE.md
+├── DESIGN.md
+└── README.md
+```
 
-- 选科推荐生成（3+1+2）
-- 公开专业选科要求查询
-- 推荐历史追踪
-- 推荐理由可解释（维度分、证据链、反事实）
-- 推荐记录导出
+## 6. 核心数据说明
 
-### 6.3 学业成长追踪
+### 6.1 内置演示数据
 
-- 学生成长画像
-- 考试趋势图
-- 风险预警列表
-
-### 6.4 教学教研管理
-
-- 教学任务管理
-- 教研成果归集
-- 绩效分析可视化
-- 班主任工作台（待办漏斗、回执率、风险学生）
-- 审计日志与评比证据包导出
-
-### 6.5 智谱模型实验室
-
-- 模型切换调用
-- 预置提示词模板（按场景筛选）
-- 模板变量 JSON 填充与模板化调用
-
-## 7. 数据策略
-
-### 当前内置
-
-- 模拟学生档案（120人）
-- 多次考试成绩
+- 学生规模：支持千人级样本（当前部署数据为 1000+）
+- 多次考试成绩与趋势
 - 成长画像与预警
-- 公开专业选科要求示例
+- 公开专业选科要求数据
 
-### 真实数据导入
+### 6.2 真实数据导入
 
-模板文件位于：
+模板文件：
 
 - apps/backend/templates/students-template.csv
 - apps/backend/templates/exam-results-template.csv
+- apps/backend/templates/teachers-template.csv
 
-后台接口支持导入：
+导入接口：
 
-- /api/data-import/students
-- /api/data-import/exam-results
+- POST /api/data-import/students
+- POST /api/data-import/exam-results
+- POST /api/data-import/teachers
 
-导出与审计接口：
-
-- /api/admin/audit-logs
-- /api/admin/export/audit-logs
-- /api/admin/export/module/:module
-- /api/admin/export/evidence-report
-
-## 8. 裸机部署
+## 7. 部署说明（简版）
 
 参考文件：
 
@@ -200,24 +160,58 @@ pnpm build
 - deploy/backend.service.example
 - deploy/deploy.sh
 
-## 9. 安全说明（评比场景最小集）
+当前线上部署要点：
+
+- 前端静态目录：/var/www/management-system/frontend/dist
+- 后端服务：management-system-backend.service
+- 对外端口：8082
+- 后端端口：8002
+- 自动同步任务：ManagementSystem-自动同步部署（每 10 分钟）
+
+## 8. 常见问题（强烈建议先看）
+
+### 8.1 登录时报错：无法连接服务器 / CORS
+
+排查顺序：
+
+1. 确认打开的是正确地址：http://47.116.199.144:8082
+2. 确认请求是发往 /api 而不是 http://localhost:4000
+3. 刷新浏览器缓存后重试
+
+### 8.2 控制台出现 runtime.connect 错误
+
+这通常来自浏览器扩展，不是本项目后端报错。建议：
+
+1. 用无痕模式重试
+2. 暂时禁用扩展后重试
+
+### 8.3 登录页应不应该默认填账号密码
+
+不应该。当前版本已修复为首次进入空表单，并支持密码显示/隐藏切换。
+
+## 9. 推荐阅读文档
+
+- GUIDE.md：完整用户操作手册
+- DESIGN.md：视觉规范
+- docs/defense-demo-script.md：8 分钟答辩脚本
+- docs/evaluation-checklist.md：评比核对清单
+- docs/ai-generated-content-policy.md：AI 内容标识规范
+- docs/how-to-build-with-ai-from-zero.md：从 0 到 1 指挥 AI 工程实战
+
+## 10. 安全与合规说明
+
+已实现：
 
 - JWT 登录鉴权
 - RBAC 角色权限
 - 基础限流
 - Helmet 安全头
-- CORS 控制
+- 审计日志
 
-本项目为评比与演示用途，不按重生产标准实现高强度安全基建。
+注意：
 
-## 10. 文档
-
-- GUIDE.md：前端功能详细使用说明与实现路径
-- DESIGN.md：前端视觉设计规范
-- official_doc/附件3：创AI案例征集指南.md：评比要求来源
-- docs/defense-demo-script.md：8分钟答辩脚本与操作清单
-- docs/evaluation-checklist.md：评比条目核对清单
-- docs/ai-generated-content-policy.md：AI内容标识规范
+- 本项目面向评比与演示，不等同于高强度生产安全基线。
+- 涉及真实学生数据时，请先脱敏并遵循学校数据治理要求。
 
 ## 11. 许可证
 
