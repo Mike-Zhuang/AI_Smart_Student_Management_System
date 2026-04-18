@@ -198,3 +198,10 @@
   - 通过内网与公网入口分别调用 `POST /api/auth/login`，`admin/admin123` 登录成功。
 - 验证结果：
   - 执行 `npm run build -w @ms/frontend` 通过。
+
+## 2026-04-18 14:33:13 +0800
+
+- 线上发布与回归：
+  - 将本地最新前端构建产物同步到服务器 `/var/www/management-system/frontend/dist`。
+  - 公网验收 `http://47.116.199.144:8082` 返回 `200 OK`。
+  - 经公网入口调用 `POST /api/auth/login`，`admin/admin123` 登录成功，确认前后端链路可用。
