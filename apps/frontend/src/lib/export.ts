@@ -1,6 +1,17 @@
 import { storage } from "./storage";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").trim();
+
+const buildRequestUrl = (path: string): string => {
+    const normalizedBase = API_BASE.replace(/\/+$/, "");
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+    if (normalizedBase.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+        return `${normalizedBase}${normalizedPath.slice(4)}`;
+    }
+
+    return `${normalizedBase}${normalizedPath}`;
+};
 
 export const downloadExport = async (
     endpoint: string,
@@ -13,7 +24,7 @@ export const downloadExport = async (
     }
 
     const target = endpoint.includes("?") ? `${endpoint}&format=${format}` : `${endpoint}?format=${format}`;
-    const response = await fetch(`${API_BASE}${target}`, {
+    const response = await fetch(buildRequestUrl(target), {
         headers: {
             Authorization: `Bearer ${token}`
         }
@@ -39,7 +50,7 @@ export const downloadFile = async (endpoint: string, fallbackFilename: string): 
         throw new Error("请先登录");
     }
 
-    const response = await fetch(`${API_BASE}${endpoint}`, {
+    const response = await fetch(buildRequestUrl(endpoint), {
         headers: {
             Authorization: `Bearer ${token}`
         }

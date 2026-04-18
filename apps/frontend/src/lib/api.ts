@@ -1,7 +1,7 @@
 import { storage } from "./storage";
 import type { ApiEnvelope } from "./types";
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000").trim();
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").trim();
 
 const buildRequestUrl = (path: string): string => {
   const normalizedBase = API_BASE.replace(/\/+$/, "");

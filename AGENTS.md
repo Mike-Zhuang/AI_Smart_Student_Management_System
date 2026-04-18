@@ -205,3 +205,14 @@
   - 将本地最新前端构建产物同步到服务器 `/var/www/management-system/frontend/dist`。
   - 公网验收 `http://47.116.199.144:8082` 返回 `200 OK`。
   - 经公网入口调用 `POST /api/auth/login`，`admin/admin123` 登录成功，确认前后端链路可用。
+
+## 2026-04-18 14:36:14 +0800
+
+- 登录失败紧急修复（线上 CORS / 目标地址错误）：
+  - `apps/frontend/src/lib/api.ts` 默认 API 基址从 `http://localhost:4000` 改为同源 `/api`，避免线上浏览器误请求本机 localhost。
+  - `apps/frontend/vite.config.ts` 新增本地开发 `/api -> http://localhost:4000` 代理，兼容开发体验。
+  - `apps/frontend/src/lib/export.ts` 同步改为同源 `/api` + URL 规范化拼接，避免导出下载接口触发同类跨域错误。
+- 验证结果：
+  - 本地构建产物中已清除 `localhost:4000` 字符串。
+  - 前端产物已重新发布到 `/var/www/management-system/frontend/dist`。
+  - 公网回归 `POST http://47.116.199.144:8082/api/auth/login` 返回登录成功。
