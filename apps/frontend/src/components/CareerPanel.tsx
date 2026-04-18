@@ -11,7 +11,12 @@ type Student = {
     name: string;
     grade: string;
     className: string;
-    subjectCombination: string;
+    subjectCombination: string | null;
+    academicStage: string;
+    selectionStatus: string;
+    firstSelectedSubject: string | null;
+    secondSelectedSubject: string | null;
+    thirdSelectedSubject: string | null;
 };
 
 type Recommendation = {
@@ -41,6 +46,15 @@ type MajorRow = {
     referenceScore: number;
 };
 
+type SubjectRules = {
+    firstSubjectOptions: string[];
+    secondarySubjectOptions: string[];
+    academicStages: string[];
+    rules: {
+        stageByGrade: Record<string, string[]>;
+    };
+};
+
 export const CareerPanel = ({ user }: { user: User }) => {
     const navigate = useNavigate();
     const [students, setStudents] = useState<Student[]>([]);
@@ -51,6 +65,14 @@ export const CareerPanel = ({ user }: { user: User }) => {
     const [apiKey, setApiKey] = useState(storage.getApiKey());
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
+    const [selectionSaving, setSelectionSaving] = useState(false);
+    const [rules, setRules] = useState<SubjectRules | null>(null);
+    const [selectionForm, setSelectionForm] = useState({
+        academicStage: "高一下",
+        firstSelectedSubject: "",
+        secondSelectedSubject: "",
+        thirdSelectedSubject: ""
+    });
 
     const dimensionLabelMap: Record<string, string> = {
         science: "科学思维",
@@ -81,6 +103,11 @@ export const CareerPanel = ({ user }: { user: User }) => {
         setMajors(response.data);
     };
 
+    const loadRules = async () => {
+        const response = await apiRequest<SubjectRules>("/api/students/subject-rules");
+        setRules(response.data);
+    };
+
     const loadRecommendations = async (targetId: number) => {
         const response = await apiRequest<Recommendation[]>(`/api/career/recommendations/${targetId}`);
         setRecommendations(response.data);
@@ -90,6 +117,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
         const load = async () => {
             try {
                 await Promise.all([loadStudents(), loadMajors()]);
+                await loadRules();
             } catch (err) {
                 setError(err instanceof Error ? err.message : "加载失败");
             }
@@ -104,6 +132,60 @@ export const CareerPanel = ({ user }: { user: User }) => {
 
         void loadRecommendations(studentId);
     }, [studentId]);
+
+    useEffect(() => {
+        if (!studentId) {
+            return;
+        }
+
+        const student = students.find((item) => item.id === studentId);
+        if (!student) {
+            return;
+        }
+
+        setSelectionForm({
+            academicStage: student.academicStage,
+            firstSelectedSubject: student.firstSelectedSubject ?? "",
+            secondSelectedSubject: student.secondSelectedSubject ?? "",
+            thirdSelectedSubject: student.thirdSelectedSubject ?? ""
+        });
+    }, [studentId, students]);
+
+    const canEditSelection = user.role === "admin" || user.role === "teacher" || user.role === "head_teacher" || user.role === "student";
+
+    const selectedStudent = students.find((item) => item.id === studentId);
+    const stageOptions = selectedStudent && rules
+        ? rules.rules.stageByGrade[selectedStudent.grade] ?? rules.academicStages
+        : rules?.academicStages ?? ["高一上", "高一下", "高二", "高三"];
+
+    const saveSelection = async () => {
+        if (!studentId) {
+            return;
+        }
+
+        setError("");
+        setSelectionSaving(true);
+        try {
+            await apiRequest(`/api/students/${studentId}/subject-selection`, {
+                method: "PATCH",
+                body: JSON.stringify({
+                    academicStage: selectionForm.academicStage,
+                    firstSelectedSubject: selectionForm.academicStage === "高一上" ? null : selectionForm.firstSelectedSubject,
+                    secondSelectedSubject: selectionForm.academicStage === "高一上" ? null : selectionForm.secondSelectedSubject,
+                    thirdSelectedSubject: selectionForm.academicStage === "高一上" ? null : selectionForm.thirdSelectedSubject
+                })
+            });
+
+            await loadStudents();
+            if (studentId) {
+                await loadRecommendations(studentId);
+            }
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "保存选课失败");
+        } finally {
+            setSelectionSaving(false);
+        }
+    };
 
     const generate = async () => {
         if (!studentId) {
@@ -179,6 +261,99 @@ export const CareerPanel = ({ user }: { user: User }) => {
                         进入AI聊天
                     </button>
                 </div>
+
+                <div className="inline-form section-actions">
+                    <label>
+                        学段
+                        <select
+                            value={selectionForm.academicStage}
+                            onChange={(event) =>
+                                setSelectionForm((prev) => ({
+                                    ...prev,
+                                    academicStage: event.target.value
+                                }))
+                            }
+                            disabled={!canEditSelection || !selectedStudent}
+                        >
+                            {stageOptions.map((item) => (
+                                <option key={item} value={item}>
+                                    {item}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        首选科
+                        <select
+                            value={selectionForm.firstSelectedSubject}
+                            onChange={(event) =>
+                                setSelectionForm((prev) => ({
+                                    ...prev,
+                                    firstSelectedSubject: event.target.value
+                                }))
+                            }
+                            disabled={!canEditSelection || selectionForm.academicStage === "高一上"}
+                        >
+                            <option value="">请选择</option>
+                            {(rules?.firstSubjectOptions ?? ["物理", "历史"]).map((item) => (
+                                <option key={item} value={item}>
+                                    {item}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        再选科1
+                        <select
+                            value={selectionForm.secondSelectedSubject}
+                            onChange={(event) =>
+                                setSelectionForm((prev) => ({
+                                    ...prev,
+                                    secondSelectedSubject: event.target.value
+                                }))
+                            }
+                            disabled={!canEditSelection || selectionForm.academicStage === "高一上"}
+                        >
+                            <option value="">请选择</option>
+                            {(rules?.secondarySubjectOptions ?? ["化学", "生物", "政治", "地理"]).map((item) => (
+                                <option key={item} value={item}>
+                                    {item}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        再选科2
+                        <select
+                            value={selectionForm.thirdSelectedSubject}
+                            onChange={(event) =>
+                                setSelectionForm((prev) => ({
+                                    ...prev,
+                                    thirdSelectedSubject: event.target.value
+                                }))
+                            }
+                            disabled={!canEditSelection || selectionForm.academicStage === "高一上"}
+                        >
+                            <option value="">请选择</option>
+                            {(rules?.secondarySubjectOptions ?? ["化学", "生物", "政治", "地理"]).map((item) => (
+                                <option key={item} value={item}>
+                                    {item}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <button
+                        className="secondary-btn"
+                        onClick={() => void saveSelection()}
+                        disabled={!canEditSelection || !selectedStudent || selectionSaving}
+                    >
+                        {selectionSaving ? "保存中..." : "保存学段与选科"}
+                    </button>
+                </div>
+
+                <p className="muted-text">
+                    当前规则：高一上仅九科学习，不可提交选科；高一下/高二/高三按“物理或历史 + 四选二”执行。
+                </p>
             </article>
 
             <article className="panel-card wide">

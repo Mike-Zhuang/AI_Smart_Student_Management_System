@@ -4,6 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ROLES } from "./constants.js";
+import {
+    isValidStageForGrade,
+    normalizeStageFromGrade,
+    parseSubjectCombination,
+    validateSelectionByStage
+} from "./utils/subjectRules.js";
 import { hashPassword } from "./utils/auth.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,6 +34,8 @@ const createSchema = (): void => {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL,
       linked_student_id INTEGER,
+            phone TEXT,
+            email TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -47,6 +55,11 @@ const createSchema = (): void => {
       grade TEXT NOT NULL,
       class_name TEXT NOT NULL,
       subject_combination TEXT,
+            academic_stage TEXT NOT NULL DEFAULT '高一下',
+            subject_selection_status TEXT NOT NULL DEFAULT 'not_started',
+            first_selected_subject TEXT,
+            second_selected_subject TEXT,
+            third_selected_subject TEXT,
       interests TEXT,
       career_goal TEXT,
       parent_user_id INTEGER,
@@ -68,6 +81,7 @@ const createSchema = (): void => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       teacher_user_id INTEGER NOT NULL,
       class_name TEXT NOT NULL,
+            subject_name TEXT,
       is_head_teacher INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       UNIQUE(teacher_user_id, class_name),
@@ -325,6 +339,47 @@ const seedDemoData = (): void => {
         className: string;
     }>;
 
+    const stageBackfillStmt = db.prepare(
+        `UPDATE students
+         SET academic_stage = ?,
+             subject_selection_status = ?,
+             first_selected_subject = ?,
+             second_selected_subject = ?,
+             third_selected_subject = ?,
+             subject_combination = ?
+         WHERE id = ?`
+    );
+
+    const studentRuleRows = db
+        .prepare(`SELECT id, grade, subject_combination as subjectCombination FROM students`)
+        .all() as Array<{ id: number; grade: string; subjectCombination: string | null }>;
+
+    for (const item of studentRuleRows) {
+        const stage = normalizeStageFromGrade(item.grade, item.id);
+        const parsed = parseSubjectCombination(item.subjectCombination);
+        const result = validateSelectionByStage({
+            stage,
+            firstSelectedSubject: parsed.first,
+            secondSelectedSubject: parsed.second,
+            thirdSelectedSubject: parsed.third
+        });
+
+        if (result.ok) {
+            stageBackfillStmt.run(
+                stage,
+                result.selectionStatus,
+                result.firstSelectedSubject,
+                result.secondSelectedSubject,
+                result.thirdSelectedSubject,
+                result.subjectCombination,
+                item.id
+            );
+            continue;
+        }
+
+        stageBackfillStmt.run(stage, "locked", null, null, null, null, item.id);
+    }
+
     const firstStudent = students[0];
     const secondStudent = students[1];
     const student001Id = createUser("student_001", "演示学生A", ROLES.STUDENT, "student123", firstStudent?.id ?? null);
@@ -340,17 +395,17 @@ const seedDemoData = (): void => {
         headChenId
     );
     const classLinkStmt = db.prepare(
-        `INSERT OR IGNORE INTO teacher_class_links (teacher_user_id, class_name, is_head_teacher, created_at)
-     VALUES (?, ?, ?, ?)`
+          `INSERT OR IGNORE INTO teacher_class_links (teacher_user_id, class_name, subject_name, is_head_teacher, created_at)
+      VALUES (?, ?, ?, ?, ?)`
     );
-    classLinkStmt.run(teacherZhangId, "高一(1)班", 0, dayjs().toISOString());
-    classLinkStmt.run(teacherZhangId, "高一(2)班", 0, dayjs().toISOString());
-    classLinkStmt.run(teacherWuId, "高二(1)班", 0, dayjs().toISOString());
-    classLinkStmt.run(teacherWuId, "高二(2)班", 0, dayjs().toISOString());
-    classLinkStmt.run(headLiId, "高一(1)班", 1, dayjs().toISOString());
-    classLinkStmt.run(headLiId, "高一(3)班", 1, dayjs().toISOString());
-    classLinkStmt.run(headChenId, "高二(1)班", 1, dayjs().toISOString());
-    classLinkStmt.run(headChenId, "高二(3)班", 1, dayjs().toISOString());
+     classLinkStmt.run(teacherZhangId, "高一(1)班", "数学", 0, dayjs().toISOString());
+     classLinkStmt.run(teacherZhangId, "高一(2)班", "数学", 0, dayjs().toISOString());
+     classLinkStmt.run(teacherWuId, "高二(1)班", "英语", 0, dayjs().toISOString());
+     classLinkStmt.run(teacherWuId, "高二(2)班", "英语", 0, dayjs().toISOString());
+     classLinkStmt.run(headLiId, "高一(1)班", "班主任", 1, dayjs().toISOString());
+     classLinkStmt.run(headLiId, "高一(3)班", "班主任", 1, dayjs().toISOString());
+     classLinkStmt.run(headChenId, "高二(1)班", "班主任", 1, dayjs().toISOString());
+     classLinkStmt.run(headChenId, "高二(3)班", "班主任", 1, dayjs().toISOString());
 
     const parentLinkInsert = db.prepare(
         `INSERT OR IGNORE INTO parent_student_links (parent_user_id, student_id, relation, created_at)
@@ -603,6 +658,108 @@ const seedDemoData = (): void => {
 
 export const initDatabase = (): void => {
     createSchema();
+
+    const userColumns = db.prepare(`PRAGMA table_info(users)`).all() as Array<{ name: string }>;
+    if (!userColumns.some((item) => item.name === "phone")) {
+        db.exec(`ALTER TABLE users ADD COLUMN phone TEXT`);
+    }
+    if (!userColumns.some((item) => item.name === "email")) {
+        db.exec(`ALTER TABLE users ADD COLUMN email TEXT`);
+    }
+
+    const studentColumns = db.prepare(`PRAGMA table_info(students)`).all() as Array<{ name: string }>;
+    if (!studentColumns.some((item) => item.name === "academic_stage")) {
+        db.exec(`ALTER TABLE students ADD COLUMN academic_stage TEXT`);
+    }
+    if (!studentColumns.some((item) => item.name === "subject_selection_status")) {
+        db.exec(`ALTER TABLE students ADD COLUMN subject_selection_status TEXT`);
+    }
+    if (!studentColumns.some((item) => item.name === "first_selected_subject")) {
+        db.exec(`ALTER TABLE students ADD COLUMN first_selected_subject TEXT`);
+    }
+    if (!studentColumns.some((item) => item.name === "second_selected_subject")) {
+        db.exec(`ALTER TABLE students ADD COLUMN second_selected_subject TEXT`);
+    }
+    if (!studentColumns.some((item) => item.name === "third_selected_subject")) {
+        db.exec(`ALTER TABLE students ADD COLUMN third_selected_subject TEXT`);
+    }
+
+    const teacherClassColumns = db.prepare(`PRAGMA table_info(teacher_class_links)`).all() as Array<{ name: string }>;
+    if (!teacherClassColumns.some((item) => item.name === "subject_name")) {
+        db.exec(`ALTER TABLE teacher_class_links ADD COLUMN subject_name TEXT`);
+    }
+
+    db.prepare(
+        `UPDATE teacher_class_links
+         SET subject_name = CASE WHEN is_head_teacher = 1 THEN '班主任' ELSE '学科待完善' END
+         WHERE subject_name IS NULL OR TRIM(subject_name) = ''`
+    ).run();
+
+    const studentNormalizeStmt = db.prepare(
+        `UPDATE students
+         SET academic_stage = ?,
+             subject_selection_status = ?,
+             first_selected_subject = ?,
+             second_selected_subject = ?,
+             third_selected_subject = ?,
+             subject_combination = ?
+         WHERE id = ?`
+    );
+
+    const studentRows = db
+        .prepare(
+            `SELECT id, grade, subject_combination as subjectCombination,
+                    academic_stage as academicStage,
+                    first_selected_subject as firstSelectedSubject,
+                    second_selected_subject as secondSelectedSubject,
+                    third_selected_subject as thirdSelectedSubject
+             FROM students`
+        )
+        .all() as Array<{
+        id: number;
+        grade: string;
+        subjectCombination: string | null;
+        academicStage: string | null;
+        firstSelectedSubject: string | null;
+        secondSelectedSubject: string | null;
+        thirdSelectedSubject: string | null;
+    }>;
+
+    for (const row of studentRows) {
+        const stageCandidate = row.academicStage;
+        const stage =
+            stageCandidate &&
+            (stageCandidate === "高一上" || stageCandidate === "高一下" || stageCandidate === "高二" || stageCandidate === "高三") &&
+            isValidStageForGrade(row.grade, stageCandidate)
+                ? stageCandidate
+                : normalizeStageFromGrade(row.grade, row.id);
+
+        const parsedCombination = parseSubjectCombination(row.subjectCombination);
+        const first = row.firstSelectedSubject ?? parsedCombination.first;
+        const second = row.secondSelectedSubject ?? parsedCombination.second;
+        const third = row.thirdSelectedSubject ?? parsedCombination.third;
+
+        const validated = validateSelectionByStage({
+            stage,
+            firstSelectedSubject: first,
+            secondSelectedSubject: second,
+            thirdSelectedSubject: third
+        });
+
+        if (validated.ok) {
+            studentNormalizeStmt.run(
+                stage,
+                validated.selectionStatus,
+                validated.firstSelectedSubject,
+                validated.secondSelectedSubject,
+                validated.thirdSelectedSubject,
+                validated.subjectCombination,
+                row.id
+            );
+        } else {
+            studentNormalizeStmt.run(stage, "locked", null, null, null, null, row.id);
+        }
+    }
 
     const chatMessageColumns = db
         .prepare(`PRAGMA table_info(chat_messages)`)

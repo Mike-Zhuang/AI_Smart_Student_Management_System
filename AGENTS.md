@@ -232,3 +232,57 @@
   - 清理本地临时导出文件 `README.pdf`、`GUIDE.pdf`，避免无效产物进入版本库。
   - 将 `docs/how-to-build-with-ai-from-zero.md` 与 `docs/how-to-build-with-ai-from-zero.docx` 纳入版本管理。
   - 统一提交后推送至远程 `main`，确保本地工作区与远端分支状态一致。
+
+## 2026-04-18 23:23:02 +0800
+
+- 启动“14项系统问题”第一批实现（交互止血 + 布局修复）：
+  - `apps/backend/src/routes/ai.ts`：模板会话写入从仅记录 `[模板:xxx]` 升级为可追溯摘要，新增模板ID、模板名、模型与变量摘要入库内容，提升会话审计可读性。
+  - `apps/frontend/src/components/AiLabPanel.tsx`：拆分“首发提交”和“续聊提交”状态，避免共享 loading 导致交互错乱；新增“无会话禁止续聊”的明确引导提示。
+  - `apps/frontend/src/components/HomeSchoolPanel.tsx`：为发送消息、标记已读、请假审核、AI草稿生成补齐 loading 与防重复点击；重构消息卡片层级（标题/状态/正文/动作/时间）。
+  - `apps/frontend/src/components/AppShell.tsx`：新增移动端导航开关与遮罩，路由切换后自动关闭抽屉；退出登录时同步收口移动端导航状态。
+  - `apps/frontend/src/styles.css`：
+    - 桌面端改为“左侧边栏固定 + 右侧主区独立滚动”。
+    - 移动端导航改为抽屉式，避免首屏被侧栏占满。
+    - 修复聊天续聊区按钮拉伸问题（追问表单改为按钮不拉伸）。
+    - 新增家校消息状态胶囊、动作区与元信息样式，提升可读层级。
+- 验证结果：
+  - 已执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）并通过。
+
+## 2026-04-18 23:34:20 +0800
+
+- 完成“14项系统问题”第二批到第四批实现（规则落库 + 账号中心 + AI流式）：
+  - `apps/backend/src/utils/subjectRules.ts`：新增黑龙江 3+1+2 规则工具，统一学段、组合合法性、默认学段与组合构建逻辑。
+  - `apps/backend/src/db.ts`：
+    - 学生表新增 `academic_stage`、`subject_selection_status`、`first_selected_subject`、`second_selected_subject`、`third_selected_subject`。
+    - 用户表新增 `phone`、`email`。
+    - 教师班级关联表新增 `subject_name`。
+    - 初始化流程新增平滑迁移与历史数据归一化，自动修正旧库学段/选课字段。
+  - `apps/backend/src/routes/students.ts`：
+    - 新增 `GET /api/students/subject-rules`。
+    - 学生列表返回学段与选课结构字段。
+    - 新增 `PATCH /api/students/:id/subject-selection`，后端强校验学段与3+1+2合法性并审计。
+  - `apps/backend/src/routes/career.ts`：
+    - 生涯推荐新增学段约束（高一上禁止生成选科推荐）。
+    - AI返回组合入库前新增合法性校验与回退策略，避免非法组合落库。
+  - `apps/backend/src/routes/auth.ts`：新增账号中心接口
+    - `GET /api/auth/me`
+    - `PATCH /api/auth/me/profile`
+    - `PATCH /api/auth/me/password`
+    - 支持角色化资料返回（学生/家长/教师班级信息）并保留审计。
+  - `apps/backend/src/services/zhipu.ts`：
+    - 新增 reasoning-only 自动降级重试（自动关闭思考模式重试一次）。
+    - 新增流式解析能力 `streamZhipu`。
+    - 统一错误映射与兜底提示。
+  - `apps/backend/src/routes/ai.ts`：新增 SSE 流式接口
+    - `POST /api/ai/chat-stream`
+    - `POST /api/ai/chat-with-template-stream`
+    - 支持会话写入、流式增量事件、完成事件、错误事件和审计记录。
+- 前端功能落地：
+  - 新增账号中心页面 `apps/frontend/src/components/AccountPanel.tsx`，支持资料编辑、改密、角色化资料展示。
+  - `apps/frontend/src/components/AppShell.tsx` 与 `apps/frontend/src/pages/DashboardPage.tsx` 新增“我的账号”导航与路由。
+  - `apps/frontend/src/components/CareerPanel.tsx`：新增学段与3+1+2结构化录入、规则拉取与保存接口接入。
+  - `apps/frontend/src/components/AiLabPanel.tsx`：新增流式输出开关与SSE增量渲染，支持普通问答和模板问答流式体验。
+  - `apps/frontend/src/lib/api.ts`：导出 `resolveApiUrl` 供流式请求复用。
+  - `apps/frontend/src/lib/types.ts`：扩展 `User` 类型支持联系方式字段。
+- 验证结果：
+  - 已执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）并通过。

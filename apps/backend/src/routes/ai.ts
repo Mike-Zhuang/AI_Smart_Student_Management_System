@@ -1,11 +1,11 @@
 import dayjs from "dayjs";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { PROMPT_TEMPLATES, fillTemplate, getTemplateById } from "../config/promptTemplates.js";
 import { DEFAULT_MODEL_ID, getSupportedModelById, SUPPORTED_MODELS } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
-import { callZhipu, ZhipuCallError } from "../services/zhipu.js";
+import { callZhipu, streamZhipu, ZhipuCallError } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 
@@ -108,11 +108,52 @@ const appendMessage = (
     db.prepare(`UPDATE chat_sessions SET updated_at = ? WHERE id = ?`).run(now, conversationId);
 };
 
+const summarizeTemplateVariables = (variables: Record<string, string>): string => {
+    const entries = Object.entries(variables);
+    if (entries.length === 0) {
+        return "无";
+    }
+
+    const summary = entries
+        .map(([key, value]) => {
+            const normalized = value.replace(/\s+/g, " ").trim();
+            const shortValue = normalized.length > 36 ? `${normalized.slice(0, 36)}...` : normalized;
+            return `${key}=${shortValue || "(空)"}`;
+        })
+        .join("; ");
+
+    return summary.length > 240 ? `${summary.slice(0, 240)}...` : summary;
+};
+
 const toPublicErrorMessage = (error: unknown): string => {
     if (error instanceof ZhipuCallError) {
         return error.message;
     }
     return error instanceof Error ? error.message : "未知错误";
+};
+
+const initSse = (res: Response): void => {
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+
+    if (typeof res.flushHeaders === "function") {
+        res.flushHeaders();
+    }
+};
+
+const sendSse = (
+    res: Response,
+    event: string,
+    payload: unknown
+): void => {
+    if (res.writableEnded) {
+        return;
+    }
+
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
 
 aiRouter.get("/models", requireAuth, (_req, res) => {
@@ -318,6 +359,117 @@ aiRouter.post("/chat", requireAuth, async (req, res) => {
     }
 });
 
+aiRouter.post("/chat-stream", requireAuth, async (req, res) => {
+    const authedReq = req as AuthedRequest;
+    const parsed = chatSchema.safeParse(req.body);
+    if (!parsed.success || !authedReq.user) {
+        res.status(400).json({ success: false, message: "请求参数不合法" });
+        return;
+    }
+
+    pruneExpiredConversations();
+    const data = parsed.data;
+    const model = getSupportedModelById(data.model ?? DEFAULT_MODEL_ID);
+    if (!model) {
+        res.status(400).json({ success: false, message: "不支持的模型" });
+        return;
+    }
+
+    if (!model.multimodal && data.multimodal && data.multimodal.length > 0) {
+        res.status(400).json({ success: false, message: "当前模型不支持多模态输入" });
+        return;
+    }
+
+    const responseFormat = data.responseFormat ?? "text";
+    if (responseFormat === "json_object" && !model.supportsJsonMode) {
+        res.status(400).json({ success: false, message: `模型 ${model.name} 不支持结构化输出模式` });
+        return;
+    }
+
+    let conversationId = data.conversationId;
+    if (conversationId) {
+        const conversation = getConversationById(conversationId, authedReq.user.id);
+        if (!conversation) {
+            res.status(404).json({ success: false, message: "会话不存在" });
+            return;
+        }
+    } else {
+        const title = data.prompt.length > 20 ? `${data.prompt.slice(0, 20)}...` : data.prompt;
+        conversationId = createConversation(authedReq.user.id, model.id, data.scenario ?? "general", title);
+    }
+
+    const startedAt = Date.now();
+    const userMessage = data.multimodal && data.multimodal.length > 0
+        ? `[多模态输入 ${data.multimodal.length} 项]\n${data.prompt}`
+        : data.prompt;
+    appendMessage(conversationId, "user", userMessage);
+
+    initSse(res);
+    sendSse(res, "conversation", { conversationId, model: model.id });
+
+    let closed = false;
+    req.on("close", () => {
+        closed = true;
+    });
+
+    try {
+        const historyMessages = getHistoryMessages(conversationId).slice(0, -1);
+        const result = await streamZhipu(
+            {
+                ...data,
+                model: model.id,
+                responseFormat,
+                historyMessages,
+                enableThinking: data.enableThinking ?? model.thinking
+            },
+            {
+                onTextDelta: (delta) => {
+                    if (closed) {
+                        return;
+                    }
+                    sendSse(res, "delta", { delta });
+                },
+                onReasoningDelta: (delta) => {
+                    if (closed) {
+                        return;
+                    }
+                    sendSse(res, "reasoning-delta", { delta });
+                }
+            }
+        );
+
+        appendMessage(conversationId, "assistant", result.content, result.reasoning);
+
+        logAudit({
+            userId: authedReq.user.id,
+            actionModule: "ai",
+            actionType: "chat_stream",
+            objectType: "model_call",
+            detail: {
+                model: model.id,
+                pricingTier: model.pricingTier,
+                responseFormat,
+                conversationId,
+                promptLength: data.prompt.length,
+                retryUsed: result.retryUsed ?? false,
+                elapsedMs: Date.now() - startedAt
+            },
+            ipAddress: extractIp(req)
+        });
+
+        sendSse(res, "complete", {
+            answer: result.content,
+            reasoning: result.reasoning,
+            conversationId,
+            model: model.id
+        });
+    } catch (error) {
+        sendSse(res, "error", { message: `模型调用失败: ${toPublicErrorMessage(error)}` });
+    } finally {
+        res.end();
+    }
+});
+
 aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
     const authedReq = req as AuthedRequest;
     const parsed = templateChatSchema.safeParse(req.body);
@@ -385,7 +537,17 @@ aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
             historyMessages
         });
 
-        appendMessage(conversationId, "user", `[模板:${template.name}]`);
+        appendMessage(
+            conversationId,
+            "user",
+            [
+                "[模板发送]",
+                `templateId: ${template.id}`,
+                `templateName: ${template.name}`,
+                `model: ${model.id}`,
+                `variables: ${summarizeTemplateVariables(input.variables)}`
+            ].join("\n")
+        );
         appendMessage(conversationId, "assistant", result.content, result.reasoning);
 
         if (authedReq.user) {
@@ -420,5 +582,140 @@ aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
         });
     } catch (error) {
         res.status(502).json({ success: false, message: `模型调用失败: ${toPublicErrorMessage(error)}` });
+    }
+});
+
+aiRouter.post("/chat-with-template-stream", requireAuth, async (req, res) => {
+    const authedReq = req as AuthedRequest;
+    const parsed = templateChatSchema.safeParse(req.body);
+    if (!parsed.success || !authedReq.user) {
+        res.status(400).json({ success: false, message: "请求参数不合法" });
+        return;
+    }
+
+    pruneExpiredConversations();
+
+    const input = parsed.data;
+    const template = getTemplateById(input.templateId);
+    if (!template) {
+        res.status(404).json({ success: false, message: "模板不存在" });
+        return;
+    }
+
+    const model = getSupportedModelById(input.model ?? DEFAULT_MODEL_ID);
+    if (!model) {
+        res.status(400).json({ success: false, message: "不支持的模型" });
+        return;
+    }
+
+    if (template.outputFormat === "json_object" && !model.supportsJsonMode) {
+        res.status(400).json({ success: false, message: `模板需要结构化输出，模型 ${model.name} 不支持` });
+        return;
+    }
+
+    const missingVariables = template.variableMeta
+        .map((item) => item.key)
+        .filter((key) => !input.variables[key] || input.variables[key].trim().length === 0);
+
+    if (missingVariables.length > 0) {
+        res.status(400).json({
+            success: false,
+            message: `模板变量缺失: ${missingVariables.join(", ")}`
+        });
+        return;
+    }
+
+    let conversationId = input.conversationId;
+    if (conversationId) {
+        const conversation = getConversationById(conversationId, authedReq.user.id);
+        if (!conversation) {
+            res.status(404).json({ success: false, message: "会话不存在" });
+            return;
+        }
+    } else {
+        conversationId = createConversation(authedReq.user.id, model.id, template.scenario, template.name);
+    }
+
+    const prompt = `${fillTemplate(template.template, input.variables)}\n\n输出规范:\n${template.outputSpec}`;
+    appendMessage(
+        conversationId,
+        "user",
+        [
+            "[模板发送]",
+            `templateId: ${template.id}`,
+            `templateName: ${template.name}`,
+            `model: ${model.id}`,
+            `variables: ${summarizeTemplateVariables(input.variables)}`
+        ].join("\n")
+    );
+
+    const startedAt = Date.now();
+    initSse(res);
+    sendSse(res, "conversation", { conversationId, model: model.id });
+
+    let closed = false;
+    req.on("close", () => {
+        closed = true;
+    });
+
+    try {
+        const historyMessages = getHistoryMessages(conversationId).slice(0, -1);
+        const result = await streamZhipu(
+            {
+                apiKey: input.apiKey,
+                model: model.id,
+                prompt,
+                systemPrompt: template.systemPrompt,
+                enableThinking: input.enableThinking ?? model.thinking,
+                responseFormat: template.outputFormat,
+                historyMessages
+            },
+            {
+                onTextDelta: (delta) => {
+                    if (closed) {
+                        return;
+                    }
+                    sendSse(res, "delta", { delta });
+                },
+                onReasoningDelta: (delta) => {
+                    if (closed) {
+                        return;
+                    }
+                    sendSse(res, "reasoning-delta", { delta });
+                }
+            }
+        );
+
+        appendMessage(conversationId, "assistant", result.content, result.reasoning);
+
+        logAudit({
+            userId: authedReq.user.id,
+            actionModule: "ai",
+            actionType: "chat_with_template_stream",
+            objectType: "prompt_template",
+            detail: {
+                templateId: input.templateId,
+                model: model.id,
+                pricingTier: model.pricingTier,
+                outputFormat: template.outputFormat,
+                conversationId,
+                retryUsed: result.retryUsed ?? false,
+                elapsedMs: Date.now() - startedAt
+            },
+            ipAddress: extractIp(req)
+        });
+
+        sendSse(res, "complete", {
+            templateId: template.id,
+            templateName: template.name,
+            answer: result.content,
+            reasoning: result.reasoning,
+            conversationId,
+            model: model.id
+        });
+    } catch (error) {
+        sendSse(res, "error", { message: `模型调用失败: ${toPublicErrorMessage(error)}` });
+    } finally {
+        res.end();
     }
 });

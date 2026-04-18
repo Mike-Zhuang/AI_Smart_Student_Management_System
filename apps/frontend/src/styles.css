@@ -189,8 +189,10 @@ textarea:focus {
 
 .app-layout {
     min-height: 100vh;
+    height: 100vh;
     display: grid;
     grid-template-columns: 300px 1fr;
+    overflow: hidden;
 }
 
 .app-sidebar {
@@ -200,6 +202,10 @@ textarea:focus {
     display: flex;
     flex-direction: column;
     gap: 22px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: auto;
 }
 
 .brand-box h1 {
@@ -241,6 +247,8 @@ textarea:focus {
     padding: 28px;
     display: grid;
     gap: 18px;
+    height: 100vh;
+    overflow: auto;
 }
 
 .top-header {
@@ -248,6 +256,27 @@ textarea:focus {
     border: 1px solid var(--border-cream);
     border-radius: 20px;
     padding: 18px;
+    display: grid;
+    gap: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    backdrop-filter: blur(2px);
+}
+
+.mobile-nav-toggle {
+    display: none;
+    border: 1px solid var(--border-warm);
+    background: white;
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+    justify-self: start;
+    cursor: pointer;
+}
+
+.sidebar-backdrop {
+    display: none;
 }
 
 .panel-grid {
@@ -343,6 +372,52 @@ textarea:focus {
     border-radius: var(--radius-sm);
     padding: 10px;
     background: white;
+}
+
+.message-item {
+    display: grid;
+    gap: 10px;
+}
+
+.list-item-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+}
+
+.status-pill {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-warm);
+    white-space: nowrap;
+}
+
+.status-pill.is-read {
+    background: #f2f2ee;
+    color: #4b4b47;
+}
+
+.status-pill.is-unread {
+    background: rgba(201, 100, 66, 0.1);
+    color: #5e2f1f;
+    border-color: rgba(201, 100, 66, 0.35);
+}
+
+.message-content {
+    margin: 0;
+    line-height: 1.65;
+}
+
+.list-item-meta {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.list-item-actions {
+    display: grid;
+    gap: 8px;
 }
 
 .list-item p {
@@ -585,6 +660,15 @@ td {
     border: 1px dashed var(--border-warm);
     border-radius: var(--radius-sm);
     background: #fff;
+    justify-items: start;
+}
+
+.chat-followup-form textarea {
+    width: 100%;
+}
+
+.chat-followup-form .primary-btn {
+    min-width: 112px;
 }
 
 .panel-card.subtle {
@@ -607,11 +691,54 @@ td {
 @media (max-width: 991px) {
     .app-layout {
         grid-template-columns: 1fr;
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
     }
 
     .app-sidebar {
-        border-right: none;
-        border-bottom: 1px solid var(--border-cream);
+        border-right: 1px solid var(--border-cream);
+        border-bottom: none;
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: min(82vw, 320px);
+        z-index: 20;
+        transform: translateX(-102%);
+        transition: transform 0.22s ease;
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+    }
+
+    .app-sidebar.open {
+        transform: translateX(0);
+    }
+
+    .sidebar-backdrop.show {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(20, 20, 19, 0.36);
+        border: none;
+        z-index: 18;
+        padding: 0;
+        margin: 0;
+    }
+
+    .mobile-nav-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .app-main {
+        height: auto;
+        overflow: visible;
+        padding: 18px;
+    }
+
+    .top-header {
+        position: static;
     }
 
     .panel-grid {

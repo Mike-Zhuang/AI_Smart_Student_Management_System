@@ -8,6 +8,11 @@ import { canAccessStudent, requireAuth } from "../middleware/auth.js";
 import { callZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import {
+    getAllAllowedCombinations,
+    isValidCombination,
+    validateSelectionByStage
+} from "../utils/subjectRules.js";
 
 const generateSchema = z.object({
     studentId: z.number().int().positive(),
@@ -15,13 +20,7 @@ const generateSchema = z.object({
     apiKey: z.string().min(10)
 });
 
-const combinations = [
-    "物理+化学+生物",
-    "物理+化学+政治",
-    "物理+生物+地理",
-    "历史+政治+地理",
-    "历史+生物+地理"
-];
+const combinations = getAllAllowedCombinations();
 
 export const careerRouter = Router();
 
@@ -84,7 +83,14 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req, res) => 
 
     const student = db
         .prepare(
-            `SELECT id, name, grade, class_name as className, interests, career_goal as careerGoal
+            `SELECT id, name, grade, class_name as className,
+                    academic_stage as academicStage,
+                    subject_selection_status as selectionStatus,
+                    first_selected_subject as firstSelectedSubject,
+                    second_selected_subject as secondSelectedSubject,
+                    third_selected_subject as thirdSelectedSubject,
+                    subject_combination as subjectCombination,
+                    interests, career_goal as careerGoal
              FROM students
              WHERE id = ?`
         )
@@ -94,6 +100,12 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req, res) => 
             name: string;
             grade: string;
             className: string;
+            academicStage: string | null;
+            selectionStatus: string | null;
+            firstSelectedSubject: string | null;
+            secondSelectedSubject: string | null;
+            thirdSelectedSubject: string | null;
+            subjectCombination: string | null;
             interests: string | null;
             careerGoal: string | null;
         }
@@ -101,6 +113,11 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req, res) => 
 
     if (!student) {
         res.status(404).json({ success: false, message: "学生不存在" });
+        return;
+    }
+
+    if (student.academicStage === "高一上") {
+        res.status(400).json({ success: false, message: "高一上学段为九科学习阶段，暂不支持生成选科推荐" });
         return;
     }
 
@@ -130,6 +147,9 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req, res) => 
         `年级班级: ${student.grade} ${student.className}`,
         `兴趣: ${student.interests ?? "暂无"}`,
         `生涯目标: ${student.careerGoal ?? "暂无"}`,
+        `当前学段: ${student.academicStage ?? "未知"}`,
+        `当前选课状态: ${student.selectionStatus ?? "未知"}`,
+        `当前选课组合: ${student.subjectCombination ?? "暂无"}`,
         `语文: ${(avgMap.get("语文") ?? 0).toFixed(1)}`,
         `数学: ${(avgMap.get("数学") ?? 0).toFixed(1)}`,
         `英语: ${(avgMap.get("英语") ?? 0).toFixed(1)}`,
@@ -178,9 +198,26 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req, res) => 
     }
 
     const dimensionScores = (parsedAnswer.dimensionScores ?? {}) as Record<string, number>;
-    const selectedCombination = typeof parsedAnswer.selectedCombination === "string" && parsedAnswer.selectedCombination.length > 0
-        ? parsedAnswer.selectedCombination
-        : combinations[0];
+    const stageValidated = validateSelectionByStage({
+        stage: (student.academicStage === "高一下" || student.academicStage === "高二" || student.academicStage === "高三" || student.academicStage === "高一上"
+            ? student.academicStage
+            : "高二"),
+        firstSelectedSubject: student.firstSelectedSubject,
+        secondSelectedSubject: student.secondSelectedSubject,
+        thirdSelectedSubject: student.thirdSelectedSubject
+    });
+
+    const currentCombination =
+        stageValidated.ok && stageValidated.subjectCombination
+            ? stageValidated.subjectCombination
+            : student.subjectCombination;
+
+    const aiCombination = typeof parsedAnswer.selectedCombination === "string" ? parsedAnswer.selectedCombination.trim() : "";
+    const selectedCombination = isValidCombination(aiCombination)
+        ? aiCombination
+        : currentCombination && isValidCombination(currentCombination)
+            ? currentCombination
+            : combinations[0];
     const majorSuggestionsFromAi = Array.isArray(parsedAnswer.majorSuggestions)
         ? parsedAnswer.majorSuggestions.filter((item) => typeof item === "string") as string[]
         : [];

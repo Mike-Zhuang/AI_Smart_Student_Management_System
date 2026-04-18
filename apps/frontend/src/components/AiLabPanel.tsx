@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { apiRequest } from "../lib/api";
+import { apiRequest, resolveApiUrl } from "../lib/api";
 import { storage } from "../lib/storage";
 
 type ModelItem = {
@@ -49,6 +49,13 @@ type ConversationMessage = {
     content: string;
     reasoning?: string | null;
     createdAt: string;
+};
+
+type StreamCompletePayload = {
+    answer: string;
+    reasoning?: string;
+    conversationId: number;
+    model: string;
 };
 
 const SCENARIO_LABEL: Record<Scenario, string> = {
@@ -178,7 +185,13 @@ export const AiLabPanel = () => {
     const [imageUrl, setImageUrl] = useState("");
     const [fileUrl, setFileUrl] = useState("");
     const [error, setError] = useState("");
-    const [loading, setLoading] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+    const [followupLoading, setFollowupLoading] = useState(false);
+    const [enableStream, setEnableStream] = useState(true);
+    const [streamingAnswer, setStreamingAnswer] = useState("");
+    const [streamingReasoning, setStreamingReasoning] = useState("");
+
+    const isBusy = submitting || followupLoading;
 
     const selectedModel = useMemo(() => models.find((item) => item.id === model), [models, model]);
     const selectedTemplate = useMemo(() => templates.find((item) => item.id === selectedTemplateId), [templates, selectedTemplateId]);
@@ -284,6 +297,93 @@ export const AiLabPanel = () => {
         }
     }, [availableModels, model]);
 
+    const consumeStream = async (path: string, payload: unknown): Promise<StreamCompletePayload> => {
+        const token = storage.getToken();
+        const response = await fetch(resolveApiUrl(path), {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok || !response.body) {
+            const raw = await response.text();
+            try {
+                const parsed = JSON.parse(raw) as { message?: string };
+                throw new Error(parsed.message ?? "流式调用失败");
+            } catch {
+                throw new Error(raw || "流式调用失败");
+            }
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let completePayload: StreamCompletePayload | null = null;
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) {
+                break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+
+            let sep = buffer.indexOf("\n\n");
+            while (sep !== -1) {
+                const block = buffer.slice(0, sep);
+                buffer = buffer.slice(sep + 2);
+
+                const lines = block.split(/\r?\n/);
+                const eventLine = lines.find((line) => line.startsWith("event:"));
+                const dataLines = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim());
+
+                if (!eventLine || dataLines.length === 0) {
+                    sep = buffer.indexOf("\n\n");
+                    continue;
+                }
+
+                const event = eventLine.slice(6).trim();
+                const rawData = dataLines.join("");
+
+                try {
+                    const parsed = JSON.parse(rawData) as Record<string, unknown>;
+                    if (event === "conversation" && typeof parsed.conversationId === "number") {
+                        setActiveConversationId(parsed.conversationId);
+                    }
+
+                    if (event === "delta" && typeof parsed.delta === "string") {
+                        setStreamingAnswer((prev) => prev + parsed.delta);
+                    }
+
+                    if (event === "reasoning-delta" && typeof parsed.delta === "string") {
+                        setStreamingReasoning((prev) => prev + parsed.delta);
+                    }
+
+                    if (event === "error") {
+                        throw new Error(typeof parsed.message === "string" ? parsed.message : "流式调用失败");
+                    }
+
+                    if (event === "complete") {
+                        completePayload = parsed as unknown as StreamCompletePayload;
+                    }
+                } catch (err) {
+                    throw err instanceof Error ? err : new Error("流式事件解析失败");
+                }
+
+                sep = buffer.indexOf("\n\n");
+            }
+        }
+
+        if (!completePayload) {
+            throw new Error("流式会话异常结束，未收到完成事件");
+        }
+
+        return completePayload;
+    };
+
     const submit = async (event: FormEvent) => {
         event.preventDefault();
         setError("");
@@ -301,7 +401,9 @@ export const AiLabPanel = () => {
             }
         }
 
-        setLoading(true);
+        setSubmitting(true);
+        setStreamingAnswer("");
+        setStreamingReasoning("");
         try {
             storage.setApiKey(apiKey.trim());
 
@@ -323,37 +425,50 @@ export const AiLabPanel = () => {
                 }
             }
 
-            const response = useTemplate && selectedTemplateId
-                ? await apiRequest<{ answer: string; reasoning?: string; conversationId: number }>("/api/ai/chat-with-template", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        apiKey: apiKey.trim(),
-                        model,
-                        templateId: selectedTemplateId,
-                        variables: variableValues,
-                        enableThinking: enableThinking && (selectedModel?.thinking ?? false),
-                        conversationId: activeConversationId ?? undefined
-                    })
-                })
-                : await apiRequest<{ answer: string; reasoning?: string; conversationId: number }>("/api/ai/chat", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        apiKey: apiKey.trim(),
-                        model,
-                        prompt,
-                        multimodal,
-                        enableThinking: enableThinking && (selectedModel?.thinking ?? false),
-                        conversationId: activeConversationId ?? undefined,
-                        scenario
-                    })
-                });
+            const requestPayload = useTemplate && selectedTemplateId
+                ? {
+                    apiKey: apiKey.trim(),
+                    model,
+                    templateId: selectedTemplateId,
+                    variables: variableValues,
+                    enableThinking: enableThinking && (selectedModel?.thinking ?? false),
+                    conversationId: activeConversationId ?? undefined
+                }
+                : {
+                    apiKey: apiKey.trim(),
+                    model,
+                    prompt,
+                    multimodal,
+                    enableThinking: enableThinking && (selectedModel?.thinking ?? false),
+                    conversationId: activeConversationId ?? undefined,
+                    scenario
+                };
 
-            setActiveConversationId(response.data.conversationId);
-            await Promise.all([loadConversations(scenario), loadMessages(response.data.conversationId)]);
+            const complete = enableStream
+                ? await consumeStream(
+                    useTemplate && selectedTemplateId ? "/api/ai/chat-with-template-stream" : "/api/ai/chat-stream",
+                    requestPayload
+                )
+                : (useTemplate && selectedTemplateId
+                    ? (await apiRequest<{ answer: string; reasoning?: string; conversationId: number }>("/api/ai/chat-with-template", {
+                        method: "POST",
+                        body: JSON.stringify(requestPayload)
+                    })).data
+                    : (await apiRequest<{ answer: string; reasoning?: string; conversationId: number }>("/api/ai/chat", {
+                        method: "POST",
+                        body: JSON.stringify(requestPayload)
+                    })).data);
+
+            setActiveConversationId(complete.conversationId);
+            await Promise.all([loadConversations(scenario), loadMessages(complete.conversationId)]);
+            setStreamingAnswer("");
+            setStreamingReasoning("");
         } catch (err) {
             setError(err instanceof Error ? err.message : "调用失败");
+            setStreamingAnswer("");
+            setStreamingReasoning("");
         } finally {
-            setLoading(false);
+            setSubmitting(false);
         }
     };
 
@@ -371,28 +486,43 @@ export const AiLabPanel = () => {
             return;
         }
 
-        setLoading(true);
+        if (!activeConversationId) {
+            setError("请先发送首条消息或点击“新建会话”后再继续对话");
+            return;
+        }
+
+        setFollowupLoading(true);
+        setStreamingAnswer("");
+        setStreamingReasoning("");
         try {
             storage.setApiKey(apiKey.trim());
-            const response = await apiRequest<{ answer: string; reasoning?: string; conversationId: number }>("/api/ai/chat", {
-                method: "POST",
-                body: JSON.stringify({
-                    apiKey: apiKey.trim(),
-                    model,
-                    prompt: followupPrompt.trim(),
-                    enableThinking: enableThinking && (selectedModel?.thinking ?? false),
-                    conversationId: activeConversationId ?? undefined,
-                    scenario
-                })
-            });
+            const payload = {
+                apiKey: apiKey.trim(),
+                model,
+                prompt: followupPrompt.trim(),
+                enableThinking: enableThinking && (selectedModel?.thinking ?? false),
+                conversationId: activeConversationId ?? undefined,
+                scenario
+            };
+
+            const response = enableStream
+                ? await consumeStream("/api/ai/chat-stream", payload)
+                : (await apiRequest<{ answer: string; reasoning?: string; conversationId: number }>("/api/ai/chat", {
+                    method: "POST",
+                    body: JSON.stringify(payload)
+                })).data;
 
             setFollowupPrompt("");
-            setActiveConversationId(response.data.conversationId);
-            await Promise.all([loadConversations(scenario), loadMessages(response.data.conversationId)]);
+            setActiveConversationId(response.conversationId);
+            await Promise.all([loadConversations(scenario), loadMessages(response.conversationId)]);
+            setStreamingAnswer("");
+            setStreamingReasoning("");
         } catch (err) {
             setError(err instanceof Error ? err.message : "续聊失败");
+            setStreamingAnswer("");
+            setStreamingReasoning("");
         } finally {
-            setLoading(false);
+            setFollowupLoading(false);
         }
     };
 
@@ -493,6 +623,15 @@ export const AiLabPanel = () => {
                         </label>
                     ) : null}
 
+                    <label className="toggle-label">
+                        <input
+                            type="checkbox"
+                            checked={enableStream}
+                            onChange={(event) => setEnableStream(event.target.checked)}
+                        />
+                        启用流式输出（逐字显示回复）
+                    </label>
+
                     {useTemplate ? (
                         <>
                             <label>
@@ -575,8 +714,8 @@ export const AiLabPanel = () => {
                         </article>
                     ) : null}
 
-                    <button className="primary-btn" type="submit" disabled={loading}>
-                        {loading ? "调用中..." : "开始分析"}
+                    <button className="primary-btn" type="submit" disabled={isBusy}>
+                        {submitting ? "调用中..." : "开始分析"}
                     </button>
                 </form>
             </article>
@@ -655,7 +794,21 @@ export const AiLabPanel = () => {
                                 </div>
                             );
                         })}
-                        {loading ? <p className="muted-text">AI 正在生成回复...</p> : null}
+                        {submitting ? <p className="muted-text">AI 正在生成首条回复...</p> : null}
+                        {followupLoading ? <p className="muted-text">AI 正在继续对话...</p> : null}
+
+                        {(submitting || followupLoading) && (streamingAnswer || streamingReasoning) ? (
+                            <div className="chat-bubble assistant">
+                                <strong>AI（流式）</strong>
+                                {streamingAnswer ? <p>{streamingAnswer}</p> : <p>正在生成正文...</p>}
+                                {streamingReasoning ? (
+                                    <details className="reasoning-box" open>
+                                        <summary>思考过程（流式）</summary>
+                                        <pre>{streamingReasoning}</pre>
+                                    </details>
+                                ) : null}
+                            </div>
+                        ) : null}
 
                         <form className="chat-followup-form" onSubmit={sendFollowup}>
                             <textarea
@@ -664,8 +817,8 @@ export const AiLabPanel = () => {
                                 value={followupPrompt}
                                 onChange={(event) => setFollowupPrompt(event.target.value)}
                             />
-                            <button className="primary-btn" type="submit" disabled={loading}>
-                                继续对话
+                            <button className="primary-btn" type="submit" disabled={isBusy}>
+                                {followupLoading ? "发送中..." : "继续对话"}
                             </button>
                         </form>
                     </div>

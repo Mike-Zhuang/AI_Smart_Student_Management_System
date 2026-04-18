@@ -3,7 +3,7 @@ import type { ApiEnvelope } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").trim();
 
-const buildRequestUrl = (path: string): string => {
+export const resolveApiUrl = (path: string): string => {
   const normalizedBase = API_BASE.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
@@ -19,7 +19,7 @@ type RequestInitEx = RequestInit & { skipAuth?: boolean };
 export async function apiRequest<T>(path: string, init: RequestInitEx = {}): Promise<ApiEnvelope<T>> {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
-  const requestUrl = buildRequestUrl(path);
+  const requestUrl = resolveApiUrl(path);
 
   if (!init.skipAuth) {
     const token = storage.getToken();

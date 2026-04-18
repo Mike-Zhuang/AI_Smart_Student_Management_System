@@ -1,6 +1,8 @@
 import axios from "axios";
+import type { Readable } from "node:stream";
 
 const ZHIPU_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+export const REASONING_ONLY_HINT = "模型仅返回思考内容，系统未拿到最终结论。你可以继续追问，或稍后重试。";
 
 type MultiModalItem = {
     type: "text" | "image_url" | "video_url" | "file_url";
@@ -22,11 +24,18 @@ export type ChatPayload = {
         role: "user" | "assistant";
         content: string;
     }>;
+    allowThinkingRetry?: boolean;
 };
 
 export type ChatResult = {
     content: string;
     reasoning?: string;
+    retryUsed?: boolean;
+};
+
+export type ZhipuStreamHandlers = {
+    onTextDelta?: (delta: string) => void;
+    onReasoningDelta?: (delta: string) => void;
 };
 
 export class ZhipuCallError extends Error {
@@ -102,6 +111,41 @@ const normalizeTextContent = (value: unknown): string => {
     return "";
 };
 
+const normalizeTextChunk = (value: unknown): string => {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => {
+                if (typeof item === "string") {
+                    return item;
+                }
+
+                if (typeof item === "object" && item !== null) {
+                    const typed = item as { type?: string; text?: string; content?: string };
+                    if (typed.type === "text" && typeof typed.text === "string") {
+                        return typed.text;
+                    }
+                    if (typeof typed.content === "string") {
+                        return typed.content;
+                    }
+                }
+
+                return "";
+            })
+            .join("");
+    }
+
+    if (typeof value === "object" && value !== null) {
+        const typed = value as { text?: string; content?: string };
+        return typed.text ?? typed.content ?? "";
+    }
+
+    return "";
+};
+
 const normalizeReasoningContent = (value: unknown): string => {
     if (typeof value === "string") {
         return value.trim();
@@ -159,7 +203,10 @@ const getRequestTimeoutMs = (payload: ChatPayload): number => {
     return 60000;
 };
 
-export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
+const buildMessages = (payload: ChatPayload): Array<{
+    role: "system" | "user" | "assistant";
+    content: string | MultiModalItem[];
+}> => {
     const content: string | MultiModalItem[] = payload.multimodal && payload.multimodal.length > 0
         ? [...payload.multimodal, { type: "text" as const, text: payload.prompt }]
         : payload.prompt;
@@ -178,18 +225,68 @@ export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
     }
 
     messages.push({ role: "user", content });
+    return messages;
+};
 
+const toRequestBody = (payload: ChatPayload, stream: boolean) => {
+    return {
+        model: payload.model,
+        messages: buildMessages(payload),
+        thinking: payload.enableThinking ? { type: "enabled" } : undefined,
+        response_format: payload.responseFormat === "json_object" ? { type: "json_object" } : undefined,
+        max_tokens: 2048,
+        temperature: 0.7,
+        stream
+    };
+};
+
+const mapAxiosError = (error: unknown): ZhipuCallError => {
+    if (!axios.isAxiosError(error)) {
+        const message = error instanceof Error ? error.message : "未知错误";
+        return new ZhipuCallError("UNKNOWN_ERROR", `调用失败: ${message}`);
+    }
+
+    const status = error.response?.status;
+    const detail =
+        (error.response?.data as { error?: { message?: string }; message?: string } | undefined)?.error?.message ||
+        (error.response?.data as { error?: { message?: string }; message?: string } | undefined)?.message ||
+        error.message;
+
+    if (status === 401 || status === 403) {
+        return new ZhipuCallError("AUTH_ERROR", `鉴权失败: ${detail}`, status);
+    }
+
+    if (status === 400 || status === 404) {
+        return new ZhipuCallError("MODEL_ERROR", `模型或参数不可用: ${detail}`, status);
+    }
+
+    if (status === 408 || error.code === "ECONNABORTED") {
+        return new ZhipuCallError("TIMEOUT", "调用超时，请稍后重试", status);
+    }
+
+    if (status) {
+        return new ZhipuCallError("UPSTREAM_ERROR", `上游服务异常: ${detail}`, status);
+    }
+
+    return new ZhipuCallError("NETWORK_ERROR", `网络异常: ${detail}`);
+};
+
+const mergeReasoningWithRetry = (firstReasoning: string, retryReasoning?: string): string => {
+    return [
+        firstReasoning,
+        "",
+        "系统提示：检测到仅有思考内容，已自动关闭思考模式重试一次。",
+        retryReasoning ?? ""
+    ]
+        .filter((item) => item.trim().length > 0)
+        .join("\n");
+};
+
+export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
     try {
         const response = await axios.post(
             ZHIPU_ENDPOINT,
-            {
-                model: payload.model,
-                messages,
-                thinking: payload.enableThinking ? { type: "enabled" } : undefined,
-                response_format: payload.responseFormat === "json_object" ? { type: "json_object" } : undefined,
-                max_tokens: 2048,
-                temperature: 0.7
-            },
+            toRequestBody(payload, false),
             {
                 headers: {
                     Authorization: `Bearer ${payload.apiKey}`,
@@ -210,8 +307,26 @@ export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
         }
 
         if (!content && reasoning) {
+            if (payload.enableThinking && payload.allowThinkingRetry !== false) {
+                try {
+                    const retryResult = await callZhipu({
+                        ...payload,
+                        enableThinking: false,
+                        allowThinkingRetry: false
+                    });
+
+                    return {
+                        content: retryResult.content,
+                        reasoning: mergeReasoningWithRetry(reasoning, retryResult.reasoning),
+                        retryUsed: true
+                    };
+                } catch {
+                    // 自动重试失败时继续走兜底提示
+                }
+            }
+
             return {
-                content: "模型正在思考，暂未返回最终结论。你可以继续追问，或关闭思考模式后重试。",
+                content: REASONING_ONLY_HINT,
                 reasoning
             };
         }
@@ -221,37 +336,143 @@ export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
             reasoning: reasoning || undefined
         };
     } catch (error) {
-        if (axios.isAxiosError(error)) {
-            const status = error.response?.status;
-            const detail =
-                (error.response?.data as { error?: { message?: string }; message?: string } | undefined)?.error?.message ||
-                (error.response?.data as { error?: { message?: string }; message?: string } | undefined)?.message ||
-                error.message;
-
-            if (status === 401 || status === 403) {
-                throw new ZhipuCallError("AUTH_ERROR", `鉴权失败: ${detail}`, status);
-            }
-
-            if (status === 400 || status === 404) {
-                throw new ZhipuCallError("MODEL_ERROR", `模型或参数不可用: ${detail}`, status);
-            }
-
-            if (status === 408 || error.code === "ECONNABORTED") {
-                throw new ZhipuCallError("TIMEOUT", "调用超时，请稍后重试", status);
-            }
-
-            if (status) {
-                throw new ZhipuCallError("UPSTREAM_ERROR", `上游服务异常: ${detail}`, status);
-            }
-
-            throw new ZhipuCallError("NETWORK_ERROR", `网络异常: ${detail}`);
-        }
-
         if (error instanceof ZhipuCallError) {
             throw error;
         }
 
-        const message = error instanceof Error ? error.message : "未知错误";
-        throw new ZhipuCallError("UNKNOWN_ERROR", `调用失败: ${message}`);
+        throw mapAxiosError(error);
+    }
+};
+
+export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHandlers = {}): Promise<ChatResult> => {
+    try {
+        const response = await axios.post(ZHIPU_ENDPOINT, toRequestBody(payload, true), {
+            headers: {
+                Authorization: `Bearer ${payload.apiKey}`,
+                "Content-Type": "application/json"
+            },
+            responseType: "stream",
+            timeout: getRequestTimeoutMs(payload)
+        });
+
+        const stream = response.data as Readable;
+        let content = "";
+        let reasoning = "";
+        let buffer = "";
+
+        for await (const chunk of stream) {
+            buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+
+            let separatorIndex = buffer.indexOf("\n\n");
+            while (separatorIndex !== -1) {
+                const block = buffer.slice(0, separatorIndex);
+                buffer = buffer.slice(separatorIndex + 2);
+
+                const dataLines = block
+                    .split(/\r?\n/)
+                    .filter((line) => line.startsWith("data:"))
+                    .map((line) => line.slice(5).trim())
+                    .filter((line) => line.length > 0);
+
+                if (dataLines.length === 0) {
+                    separatorIndex = buffer.indexOf("\n\n");
+                    continue;
+                }
+
+                const payloadLine = dataLines.join("");
+                if (payloadLine === "[DONE]") {
+                    separatorIndex = buffer.indexOf("\n\n");
+                    continue;
+                }
+
+                try {
+                    const parsed = JSON.parse(payloadLine) as {
+                        choices?: Array<{
+                            delta?: {
+                                content?: unknown;
+                                reasoning_content?: unknown;
+                                reasoning?: unknown;
+                                thinking?: unknown;
+                            };
+                            message?: {
+                                content?: unknown;
+                                reasoning_content?: unknown;
+                                reasoning?: unknown;
+                                thinking?: unknown;
+                            };
+                        }>;
+                    };
+
+                    const choice = parsed.choices?.[0];
+                    const delta = choice?.delta ?? choice?.message;
+                    if (!delta) {
+                        separatorIndex = buffer.indexOf("\n\n");
+                        continue;
+                    }
+
+                    const textDelta = normalizeTextChunk(delta.content);
+                    const reasoningDelta = normalizeTextChunk(delta.reasoning_content ?? delta.reasoning ?? delta.thinking);
+
+                    if (textDelta.length > 0) {
+                        content += textDelta;
+                        handlers.onTextDelta?.(textDelta);
+                    }
+
+                    if (reasoningDelta.length > 0) {
+                        reasoning += reasoningDelta;
+                        handlers.onReasoningDelta?.(reasoningDelta);
+                    }
+                } catch {
+                    // 忽略非JSON事件块
+                }
+
+                separatorIndex = buffer.indexOf("\n\n");
+            }
+        }
+
+        const normalizedContent = content.trim();
+        const normalizedReasoning = reasoning.trim();
+
+        if (!normalizedContent && !normalizedReasoning) {
+            throw new ZhipuCallError("EMPTY_RESPONSE", "模型未返回有效内容");
+        }
+
+        if (!normalizedContent && normalizedReasoning) {
+            if (payload.enableThinking && payload.allowThinkingRetry !== false) {
+                try {
+                    const retryResult = await callZhipu({
+                        ...payload,
+                        enableThinking: false,
+                        allowThinkingRetry: false
+                    });
+                    handlers.onTextDelta?.(retryResult.content);
+
+                    return {
+                        content: retryResult.content,
+                        reasoning: mergeReasoningWithRetry(normalizedReasoning, retryResult.reasoning),
+                        retryUsed: true
+                    };
+                } catch {
+                    // 降级重试失败时继续返回兜底文案
+                }
+            }
+
+            handlers.onTextDelta?.(REASONING_ONLY_HINT);
+            return {
+                content: REASONING_ONLY_HINT,
+                reasoning: normalizedReasoning
+            };
+        }
+
+        return {
+            content: normalizedContent,
+            reasoning: normalizedReasoning || undefined
+        };
+    } catch (error) {
+        if (error instanceof ZhipuCallError) {
+            throw error;
+        }
+
+        throw mapAxiosError(error);
     }
 };

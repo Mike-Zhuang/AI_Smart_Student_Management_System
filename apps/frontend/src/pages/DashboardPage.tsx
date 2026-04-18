@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Navigate, useParams } from "react-router-dom";
 import { AppShell } from "../components/AppShell";
+import { AccountPanel } from "../components/AccountPanel";
 import { AiLabPanel } from "../components/AiLabPanel";
 import { CareerPanel } from "../components/CareerPanel";
 import { DataImportPanel } from "../components/DataImportPanel";
@@ -11,7 +12,7 @@ import { OverviewPanel } from "../components/OverviewPanel";
 import { TeachingPanel } from "../components/TeachingPanel";
 import { useAuth } from "../App";
 
-const ALLOWED = ["overview", "home-school", "career", "growth", "head-teacher", "teaching", "ai-lab", "data-import"];
+const ALLOWED = ["overview", "home-school", "career", "growth", "head-teacher", "teaching", "ai-lab", "account", "data-import"];
 
 export const DashboardPage = () => {
     const { user, setUser } = useAuth();
@@ -32,6 +33,8 @@ export const DashboardPage = () => {
                 return <TeachingPanel user={user!} />;
             case "ai-lab":
                 return <AiLabPanel />;
+            case "account":
+                return <AccountPanel />;
             case "data-import":
                 return <DataImportPanel />;
             default:

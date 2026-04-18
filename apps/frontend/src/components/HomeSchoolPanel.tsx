@@ -33,6 +33,10 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
     const [form, setForm] = useState({ receiverRole: "parent", title: "", content: "" });
     const [apiKey, setApiKey] = useState(storage.getApiKey());
     const [draftMap, setDraftMap] = useState<Record<number, string>>({});
+    const [sending, setSending] = useState(false);
+    const [readingMap, setReadingMap] = useState<Record<number, boolean>>({});
+    const [draftingMap, setDraftingMap] = useState<Record<number, boolean>>({});
+    const [reviewingMap, setReviewingMap] = useState<Record<number, boolean>>({});
 
     const load = async () => {
         try {
@@ -54,6 +58,7 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
     const onSend = async (event: FormEvent) => {
         event.preventDefault();
         setError("");
+        setSending(true);
         try {
             await apiRequest("/api/home-school/messages", {
                 method: "POST",
@@ -63,10 +68,13 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
             await load();
         } catch (err) {
             setError(err instanceof Error ? err.message : "发送失败");
+        } finally {
+            setSending(false);
         }
     };
 
     const onReview = async (id: number, status: "approved" | "rejected") => {
+        setReviewingMap((prev) => ({ ...prev, [id]: true }));
         try {
             await apiRequest(`/api/home-school/leave-requests/${id}/review`, {
                 method: "PATCH",
@@ -75,15 +83,20 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
             await load();
         } catch (err) {
             setError(err instanceof Error ? err.message : "审核失败");
+        } finally {
+            setReviewingMap((prev) => ({ ...prev, [id]: false }));
         }
     };
 
     const markRead = async (id: number) => {
+        setReadingMap((prev) => ({ ...prev, [id]: true }));
         try {
             await apiRequest(`/api/home-school/messages/${id}/read`, { method: "PATCH" });
             await load();
         } catch (err) {
             setError(err instanceof Error ? err.message : "回执失败");
+        } finally {
+            setReadingMap((prev) => ({ ...prev, [id]: false }));
         }
     };
 
@@ -93,6 +106,7 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
             return;
         }
 
+        setDraftingMap((prev) => ({ ...prev, [id]: true }));
         try {
             storage.setApiKey(apiKey.trim());
             const response = await apiRequest<{ draft: string }>(`/api/home-school/messages/${id}/ai-reply-draft`, {
@@ -102,6 +116,8 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
             setDraftMap((prev) => ({ ...prev, [id]: response.data.draft }));
         } catch (err) {
             setError(err instanceof Error ? err.message : "生成草稿失败");
+        } finally {
+            setDraftingMap((prev) => ({ ...prev, [id]: false }));
         }
     };
 
@@ -135,8 +151,8 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                                 required
                             />
                         </label>
-                        <button className="primary-btn" type="submit">
-                            发送
+                        <button className="primary-btn" type="submit" disabled={sending}>
+                            {sending ? "发送中..." : "发送"}
                         </button>
                     </form>
                 </article>
@@ -164,13 +180,25 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                 </div>
                 <div className="list-box">
                     {messages.slice(0, 8).map((item) => (
-                        <div key={item.id} className="list-item">
-                            <strong>{item.title}</strong>
-                            <p>{item.content}</p>
-                            <p>状态: {item.isRead ? "已读" : "未读"}</p>
+                        <div key={item.id} className="list-item message-item">
+                            <div className="list-item-header">
+                                <strong>{item.title}</strong>
+                                <span className={`status-pill ${item.isRead ? "is-read" : "is-unread"}`}>
+                                    {item.isRead ? "已读" : "未读"}
+                                </span>
+                            </div>
+                            <p className="message-content">{item.content}</p>
+                            <small className="list-item-meta">
+                                {item.senderName} · {new Date(item.createdAt).toLocaleString()}
+                            </small>
+                            <div className="list-item-actions">
                             {!item.isRead ? (
-                                <button className="secondary-btn" onClick={() => void markRead(item.id)}>
-                                    标记已读
+                                <button
+                                    className="secondary-btn"
+                                    onClick={() => void markRead(item.id)}
+                                    disabled={Boolean(readingMap[item.id])}
+                                >
+                                    {readingMap[item.id] ? "提交中..." : "标记已读"}
                                 </button>
                             ) : null}
                             {(user.role === "admin" || user.role === "teacher" || user.role === "head_teacher") ? (
@@ -180,15 +208,17 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                                         placeholder="API Key（用于生成回复草稿）"
                                         onChange={(event) => setApiKey(event.target.value)}
                                     />
-                                    <button className="secondary-btn" onClick={() => void generateDraft(item.id)}>
-                                        AI生成回复草稿
+                                    <button
+                                        className="secondary-btn"
+                                        onClick={() => void generateDraft(item.id)}
+                                        disabled={Boolean(draftingMap[item.id])}
+                                    >
+                                        {draftingMap[item.id] ? "生成中..." : "AI生成回复草稿"}
                                     </button>
                                 </div>
                             ) : null}
+                            </div>
                             {draftMap[item.id] ? <p className="ai-draft">AI草稿: {draftMap[item.id]}</p> : null}
-                            <small>
-                                {item.senderName} · {new Date(item.createdAt).toLocaleString()}
-                            </small>
                         </div>
                     ))}
                 </div>
@@ -227,10 +257,18 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                                     <td>{item.reason}</td>
                                     <td>{item.status}</td>
                                     <td className="btn-row">
-                                        <button className="secondary-btn" onClick={() => onReview(item.id, "approved")}>
-                                            同意
+                                        <button
+                                            className="secondary-btn"
+                                            onClick={() => onReview(item.id, "approved")}
+                                            disabled={Boolean(reviewingMap[item.id])}
+                                        >
+                                            {reviewingMap[item.id] ? "处理中..." : "同意"}
                                         </button>
-                                        <button className="secondary-btn" onClick={() => onReview(item.id, "rejected")}>
+                                        <button
+                                            className="secondary-btn"
+                                            onClick={() => onReview(item.id, "rejected")}
+                                            disabled={Boolean(reviewingMap[item.id])}
+                                        >
                                             驳回
                                         </button>
                                     </td>

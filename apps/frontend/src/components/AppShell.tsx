@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
     { key: "head-teacher", label: "班主任工作台", roles: ["admin", "head_teacher"] },
     { key: "teaching", label: "教研管理", roles: ["admin", "teacher", "head_teacher"] },
     { key: "ai-lab", label: "AI助手中心", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+    { key: "account", label: "我的账号", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "data-import", label: "数据导入", roles: ["admin", "head_teacher"] }
 ];
 
@@ -24,10 +25,16 @@ export const AppShell = ({
     children: ReactNode;
 }) => {
     const navigate = useNavigate();
+    const location = useLocation();
+    const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+    useEffect(() => {
+        setMobileNavOpen(false);
+    }, [location.pathname]);
 
     return (
-        <div className="app-layout">
-            <aside className="app-sidebar">
+        <div className={`app-layout ${mobileNavOpen ? "mobile-nav-open" : ""}`}>
+            <aside className={`app-sidebar ${mobileNavOpen ? "open" : ""}`}>
                 <div className="brand-box">
                     <h1>高中AI管理辅助系统</h1>
                     <p>Management Assistant · Demo</p>
@@ -39,6 +46,7 @@ export const AppShell = ({
                             key={item.key}
                             to={`/dashboard/${item.key}`}
                             className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
+                            onClick={() => setMobileNavOpen(false)}
                         >
                             {item.label}
                         </NavLink>
@@ -52,6 +60,7 @@ export const AppShell = ({
                     <button
                         className="secondary-btn"
                         onClick={() => {
+                            setMobileNavOpen(false);
                             storage.clearAuth();
                             onLogout();
                             navigate("/login");
@@ -62,8 +71,23 @@ export const AppShell = ({
                 </div>
             </aside>
 
+            <button
+                type="button"
+                className={`sidebar-backdrop ${mobileNavOpen ? "show" : ""}`}
+                aria-hidden={!mobileNavOpen}
+                aria-label="关闭导航"
+                onClick={() => setMobileNavOpen(false)}
+            />
+
             <main className="app-main">
                 <header className="top-header">
+                    <button
+                        type="button"
+                        className="mobile-nav-toggle"
+                        onClick={() => setMobileNavOpen((prev) => !prev)}
+                    >
+                        {mobileNavOpen ? "关闭菜单" : "打开菜单"}
+                    </button>
                     <div>
                         <h2>{user.displayName}</h2>
                         <p>欢迎回来，请按模块完成管理与评比演示</p>

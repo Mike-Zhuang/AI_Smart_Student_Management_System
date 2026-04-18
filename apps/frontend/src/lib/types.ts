@@ -6,6 +6,8 @@ export type User = {
   displayName: string;
   role: Role;
   linkedStudentId: number | null;
+  phone?: string | null;
+  email?: string | null;
 };
 
 export type ApiEnvelope<T> = {
