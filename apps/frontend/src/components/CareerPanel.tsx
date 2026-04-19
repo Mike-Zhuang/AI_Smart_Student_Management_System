@@ -92,9 +92,10 @@ export const CareerPanel = ({ user }: { user: User }) => {
 
     const loadStudents = async () => {
         const response = await apiRequest<Student[]>("/api/students");
-        setStudents(response.data.slice(0, 80));
-        if (!studentId && response.data.length > 0) {
-            setStudentId(response.data[0].id);
+        const ordered = [...response.data].sort((a, b) => b.id - a.id);
+        setStudents(ordered);
+        if (!studentId && ordered.length > 0) {
+            setStudentId(ordered[0].id);
         }
     };
 

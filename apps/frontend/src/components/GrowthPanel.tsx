@@ -53,9 +53,10 @@ export const GrowthPanel = ({ user }: { user: User }) => {
         const loadStudents = async () => {
             try {
                 const response = await apiRequest<Student[]>("/api/students");
-                setStudents(response.data.slice(0, 60));
-                if (!studentId && response.data.length > 0) {
-                    setStudentId(response.data[0].id);
+                const ordered = [...response.data].sort((a, b) => b.id - a.id);
+                setStudents(ordered);
+                if (!studentId && ordered.length > 0) {
+                    setStudentId(ordered[0].id);
                 }
             } catch (err) {
                 setError(err instanceof Error ? err.message : "加载学生失败");

@@ -309,3 +309,11 @@
   - 执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）通过。
   - 执行 `pnpm --config.package-manager-strict=false --filter @ms/backend run build` 通过。
   - 执行 `pnpm --config.package-manager-strict=false --filter @ms/frontend run build` 通过。
+
+## 2026-04-19 22:01:51 +0800
+
+- 新导入学生可见性修复（避免“上传成功但下拉看不到”）：
+  - `apps/frontend/src/components/CareerPanel.tsx` 取消学生列表 `slice(0, 80)` 截断，改为展示完整列表并按 `id` 倒序（最新导入优先）。
+  - `apps/frontend/src/components/GrowthPanel.tsx` 取消学生列表 `slice(0, 60)` 截断，改为展示完整列表并按 `id` 倒序。
+- 验证结果：
+  - 执行 `npm run build -w @ms/frontend` 通过。
