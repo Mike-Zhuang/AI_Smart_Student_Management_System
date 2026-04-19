@@ -64,7 +64,7 @@ pnpm install
 ```bash
 npm run dev
 # 或
-pnpm dev
+pnpm run dev:pnpm
 ```
 
 默认地址：
@@ -82,7 +82,7 @@ pnpm dev
 ```bash
 npm run build
 # 或
-pnpm build
+pnpm run build:pnpm
 ```
 
 ### 3.5 VS Code 调试
@@ -140,6 +140,15 @@ pnpm build
 
 ### 6.2 真实数据导入
 
+当前版本默认采用 CSV 直传导入，不需要手工转换 JSON。
+
+页面操作流程：
+
+1. 下载对应模板（学生/成绩/教师班级）
+2. 在 Excel 或 WPS 中填写 CSV 数据
+3. 回到“数据导入”上传 CSV 文件
+4. 查看导入结果统计与逐行错误提示
+
 模板文件：
 
 - apps/backend/templates/students-template.csv
@@ -148,9 +157,14 @@ pnpm build
 
 导入接口：
 
-- POST /api/data-import/students
-- POST /api/data-import/exam-results
-- POST /api/data-import/teachers
+- POST /api/data-import/students（`multipart/form-data`，字段名 `file`）
+- POST /api/data-import/exam-results（`multipart/form-data`，字段名 `file`）
+- POST /api/data-import/teachers（`multipart/form-data`，字段名 `file`）
+
+说明：
+
+- 导入结果会返回 `total/imported/updated/failed/errors` 统计。
+- 仅管理员和班主任角色可见并可执行数据导入。
 
 ## 7. 部署说明（简版）
 
@@ -188,6 +202,14 @@ pnpm build
 ### 8.3 登录页应不应该默认填账号密码
 
 不应该。当前版本已修复为首次进入空表单，并支持密码显示/隐藏切换。
+
+### 8.4 数据导入提示“失败行”如何处理
+
+处理顺序：
+
+1. 按提示查看具体行号、字段和原因
+2. 对照模板修正后重新上传同一 CSV
+3. 若仍失败，先用 1-3 行小样本验证再批量导入
 
 ## 9. 推荐阅读文档
 

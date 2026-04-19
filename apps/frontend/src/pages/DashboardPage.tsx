@@ -11,8 +11,21 @@ import { HomeSchoolPanel } from "../components/HomeSchoolPanel";
 import { OverviewPanel } from "../components/OverviewPanel";
 import { TeachingPanel } from "../components/TeachingPanel";
 import { useAuth } from "../App";
+import type { User } from "../lib/types";
 
 const ALLOWED = ["overview", "home-school", "career", "growth", "head-teacher", "teaching", "ai-lab", "account", "data-import"];
+
+const SECTION_ROLES: Record<string, User["role"][]> = {
+    overview: ["admin", "teacher", "head_teacher", "parent", "student"],
+    "home-school": ["admin", "teacher", "head_teacher", "parent", "student"],
+    career: ["admin", "teacher", "head_teacher", "parent", "student"],
+    growth: ["admin", "teacher", "head_teacher", "parent", "student"],
+    "head-teacher": ["admin", "head_teacher"],
+    teaching: ["admin", "teacher", "head_teacher"],
+    "ai-lab": ["admin", "teacher", "head_teacher", "parent", "student"],
+    account: ["admin", "teacher", "head_teacher", "parent", "student"],
+    "data-import": ["admin", "head_teacher"]
+};
 
 export const DashboardPage = () => {
     const { user, setUser } = useAuth();
@@ -48,6 +61,12 @@ export const DashboardPage = () => {
 
     if (!ALLOWED.includes(section)) {
         return <Navigate to="/dashboard/overview" replace />;
+    }
+
+    const allowedSectionsForRole = ALLOWED.filter((item) => SECTION_ROLES[item]?.includes(user.role));
+    if (!allowedSectionsForRole.includes(section)) {
+        const fallback = allowedSectionsForRole[0] ?? "overview";
+        return <Navigate to={`/dashboard/${fallback}`} replace />;
     }
 
     return (

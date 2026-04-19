@@ -93,7 +93,7 @@
 
 ## 2. 现场操作清单（Checklist）
 
-1. 启动服务前检查：`npm run dev` 或 `pnpm dev`。
+1. 启动服务前检查：`npm run dev` 或 `pnpm run dev:pnpm`。
 2. 演示账号预检：`admin / admin123` 可登录。
 3. API Key 预检：提前配置可用智谱 Key。
 4. 关键页面预热：总览、家校、生涯、成长、班主任、教研、AI。

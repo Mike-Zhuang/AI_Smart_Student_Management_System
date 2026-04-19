@@ -1,115 +1,218 @@
-import { FormEvent, useState } from "react";
+import { type ChangeEvent, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { downloadFile } from "../lib/export";
 
-const SAMPLE_STUDENT_JSON = `[
-  {
-    "studentNo": "S2026999",
-    "name": "示例学生",
-    "grade": "高一",
-    "className": "高一(3)班",
-    "subjectCombination": "物理+化学+生物",
-    "interests": "编程;机器人",
-    "careerGoal": "人工智能工程师"
-  }
-]`;
+type ImportKind = "students" | "exam-results" | "teachers";
 
-const SAMPLE_EXAM_JSON = `[
-  {
-    "studentNo": "S2026999",
-    "examName": "2026学年第一学期期中",
-    "examDate": "2026-11-18",
-    "subject": "数学",
-    "score": 88
-  }
-]`;
+type ImportSummary = {
+    total: number;
+    imported: number;
+    updated: number;
+    ignored: number;
+    failed: number;
+    errors: Array<{
+        line: number;
+        field: string;
+        reason: string;
+    }>;
+};
+
+type ImportFeedback = {
+    type: "success" | "error";
+    message: string;
+    summary?: ImportSummary;
+};
+
+const IMPORT_CONFIG: Array<{
+    kind: ImportKind;
+    title: string;
+    description: string;
+    templateEndpoint: string;
+    templateFilename: string;
+    uploadEndpoint: string;
+}> = [
+    {
+        kind: "students",
+        title: "学生基础数据",
+        description: "导入学号、姓名、年级、班级、选科与兴趣目标。",
+        templateEndpoint: "/api/data-import/template-files/students",
+        templateFilename: "students-template.csv",
+        uploadEndpoint: "/api/data-import/students"
+    },
+    {
+        kind: "exam-results",
+        title: "考试成绩数据",
+        description: "导入学号对应的考试名称、日期、科目与分数。",
+        templateEndpoint: "/api/data-import/template-files/exam-results",
+        templateFilename: "exam-results-template.csv",
+        uploadEndpoint: "/api/data-import/exam-results"
+    },
+    {
+        kind: "teachers",
+        title: "教师班级关系数据",
+        description: "导入教师账号、班级、是否班主任与任教学科。",
+        templateEndpoint: "/api/data-import/template-files/teachers",
+        templateFilename: "teachers-template.csv",
+        uploadEndpoint: "/api/data-import/teachers"
+    }
+];
+
+const defaultFiles: Record<ImportKind, File | null> = {
+    students: null,
+    "exam-results": null,
+    teachers: null
+};
+
+const defaultFeedback: Record<ImportKind, ImportFeedback | null> = {
+    students: null,
+    "exam-results": null,
+    teachers: null
+};
 
 export const DataImportPanel = () => {
-    const [studentJson, setStudentJson] = useState(SAMPLE_STUDENT_JSON);
-    const [examJson, setExamJson] = useState(SAMPLE_EXAM_JSON);
-    const [result, setResult] = useState("");
-    const [error, setError] = useState("");
+    const [selectedFiles, setSelectedFiles] = useState<Record<ImportKind, File | null>>(defaultFiles);
+    const [feedback, setFeedback] = useState<Record<ImportKind, ImportFeedback | null>>(defaultFeedback);
+    const [uploadingKind, setUploadingKind] = useState<ImportKind | null>(null);
 
-    const importStudents = async (event: FormEvent) => {
-        event.preventDefault();
-        setError("");
+    const onFileChange = (kind: ImportKind, event: ChangeEvent<HTMLInputElement>) => {
+        const nextFile = event.target.files?.[0] ?? null;
+        setSelectedFiles((prev) => ({ ...prev, [kind]: nextFile }));
+        setFeedback((prev) => ({ ...prev, [kind]: null }));
+    };
+
+    const handleTemplateDownload = async (kind: ImportKind) => {
+        const config = IMPORT_CONFIG.find((item) => item.kind === kind);
+        if (!config) {
+            return;
+        }
+
         try {
-            const rows = JSON.parse(studentJson) as unknown[];
-            const response = await apiRequest<{ imported: number }>("/api/data-import/students", {
-                method: "POST",
-                body: JSON.stringify({ rows })
-            });
-            setResult(`学生导入成功: ${response.data.imported} 条`);
+            await downloadFile(config.templateEndpoint, config.templateFilename);
+            setFeedback((prev) => ({
+                ...prev,
+                [kind]: { type: "success", message: "模板下载成功，请在CSV中填写后上传。" }
+            }));
         } catch (err) {
-            setError(err instanceof Error ? err.message : "导入失败");
+            setFeedback((prev) => ({
+                ...prev,
+                [kind]: { type: "error", message: err instanceof Error ? err.message : "模板下载失败" }
+            }));
         }
     };
 
-    const importExams = async (event: FormEvent) => {
-        event.preventDefault();
-        setError("");
+    const handleUpload = async (kind: ImportKind) => {
+        const config = IMPORT_CONFIG.find((item) => item.kind === kind);
+        if (!config) {
+            return;
+        }
+
+        const file = selectedFiles[kind];
+        if (!file) {
+            setFeedback((prev) => ({
+                ...prev,
+                [kind]: { type: "error", message: "请先选择CSV文件" }
+            }));
+            return;
+        }
+
+        setUploadingKind(kind);
+        setFeedback((prev) => ({ ...prev, [kind]: null }));
+
         try {
-            const rows = JSON.parse(examJson) as unknown[];
-            const response = await apiRequest<{ imported: number }>("/api/data-import/exam-results", {
+            const formData = new FormData();
+            formData.append("file", file);
+
+            const response = await apiRequest<ImportSummary>(config.uploadEndpoint, {
                 method: "POST",
-                body: JSON.stringify({ rows })
+                body: formData
             });
-            setResult(`成绩导入成功: ${response.data.imported} 条`);
+
+            const summary = response.data;
+            const message = `总计 ${summary.total} 行，新增 ${summary.imported} 条，更新 ${summary.updated} 条，失败 ${summary.failed} 行。`;
+
+            setFeedback((prev) => ({
+                ...prev,
+                [kind]: {
+                    type: summary.failed > 0 ? "error" : "success",
+                    message,
+                    summary
+                }
+            }));
         } catch (err) {
-            setError(err instanceof Error ? err.message : "导入失败");
+            setFeedback((prev) => ({
+                ...prev,
+                [kind]: { type: "error", message: err instanceof Error ? err.message : "导入失败" }
+            }));
+        } finally {
+            setUploadingKind(null);
         }
     };
 
     return (
         <section className="panel-grid">
             <article className="panel-card wide">
-                <h3>真实数据导入模板（后期可替换模拟数据）</h3>
-                <p>无需去后端目录查找，直接点击下载模板即可开始整理真实数据。</p>
-                <div className="inline-form section-actions">
-                    <button
-                        className="secondary-btn"
-                        onClick={() => void downloadFile("/api/data-import/template-files/students", "students-template.csv")}
-                    >
-                        下载学生模板
-                    </button>
-                    <button
-                        className="secondary-btn"
-                        onClick={() => void downloadFile("/api/data-import/template-files/exam-results", "exam-results-template.csv")}
-                    >
-                        下载成绩模板
-                    </button>
-                    <button
-                        className="secondary-btn"
-                        onClick={() => void downloadFile("/api/data-import/template-files/teachers", "teachers-template.csv")}
-                    >
-                        下载教师班级模板
-                    </button>
-                </div>
+                <h3>真实数据导入（CSV 直传）</h3>
+                <p>教师只需要下载模板、填写CSV并上传，不需要手工转换 JSON。</p>
             </article>
 
-            <article className="panel-card wide">
-                <h4>导入学生基础数据（JSON）</h4>
-                <p>可先用上方 CSV 模板整理数据，再转换为 JSON 导入；后续可平滑升级为批量文件上传。</p>
-                <form onSubmit={importStudents} className="form-stack">
-                    <textarea rows={10} value={studentJson} onChange={(event) => setStudentJson(event.target.value)} />
-                    <button className="primary-btn" type="submit">
-                        导入学生
-                    </button>
-                </form>
-            </article>
+            {IMPORT_CONFIG.map((config) => {
+                const currentFeedback = feedback[config.kind];
+                const currentFile = selectedFiles[config.kind];
+                const isUploading = uploadingKind === config.kind;
+                const hasErrors = (currentFeedback?.summary?.errors ?? []).length > 0;
 
-            <article className="panel-card wide">
-                <h4>导入考试成绩（JSON）</h4>
-                <form onSubmit={importExams} className="form-stack">
-                    <textarea rows={10} value={examJson} onChange={(event) => setExamJson(event.target.value)} />
-                    <button className="primary-btn" type="submit">
-                        导入成绩
-                    </button>
-                </form>
-            </article>
+                return (
+                    <article key={config.kind} className="panel-card">
+                        <h4>{config.title}</h4>
+                        <p>{config.description}</p>
+                        <div className="file-upload-row section-actions">
+                            <button
+                                type="button"
+                                className="secondary-btn"
+                                onClick={() => void handleTemplateDownload(config.kind)}
+                                disabled={isUploading}
+                            >
+                                下载模板
+                            </button>
+                            <input
+                                className="file-upload-input"
+                                type="file"
+                                accept=".csv,text/csv"
+                                onChange={(event) => onFileChange(config.kind, event)}
+                                disabled={isUploading}
+                            />
+                            <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={() => void handleUpload(config.kind)}
+                                disabled={isUploading || !currentFile}
+                            >
+                                {isUploading ? "上传中..." : "上传导入"}
+                            </button>
+                        </div>
 
-            {result ? <p className="success-text">{result}</p> : null}
-            {error ? <p className="error-text">{error}</p> : null}
+                        <p className="muted-text import-hint">{currentFile ? `已选择：${currentFile.name}` : "请先选择CSV文件"}</p>
+
+                        {currentFeedback ? (
+                            <div className="import-result">
+                                <p className={currentFeedback.type === "success" ? "success-text" : "error-text"}>{currentFeedback.message}</p>
+                                {hasErrors ? (
+                                    <ul className="import-error-list">
+                                        {currentFeedback.summary!.errors.slice(0, 8).map((item, index) => (
+                                            <li key={`${item.line}-${item.field}-${index}`}>
+                                                第 {item.line} 行 · {item.field}：{item.reason}
+                                            </li>
+                                        ))}
+                                        {currentFeedback.summary!.errors.length > 8 ? (
+                                            <li>其余 {currentFeedback.summary!.errors.length - 8} 条错误请按模板修正后重试。</li>
+                                        ) : null}
+                                    </ul>
+                                ) : null}
+                            </div>
+                        ) : null}
+                    </article>
+                );
+            })}
         </section>
     );
 };

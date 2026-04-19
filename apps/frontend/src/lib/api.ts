@@ -18,7 +18,10 @@ type RequestInitEx = RequestInit & { skipAuth?: boolean };
 
 export async function apiRequest<T>(path: string, init: RequestInitEx = {}): Promise<ApiEnvelope<T>> {
   const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
+  const isFormDataBody = typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (!isFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const requestUrl = resolveApiUrl(path);
 
   if (!init.skipAuth) {

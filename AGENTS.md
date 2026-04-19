@@ -286,3 +286,26 @@
   - `apps/frontend/src/lib/types.ts`：扩展 `User` 类型支持联系方式字段。
 - 验证结果：
   - 已执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）并通过。
+
+## 2026-04-19 20:41:58 +0800
+
+- 数据导入主流程重构为 CSV 直传（无需手工 JSON 转换）：
+  - `apps/backend/src/routes/dataImport.ts` 新增 `multipart/form-data` 上传能力（字段 `file`），支持学生、成绩、教师三类 CSV 导入。
+  - 学生/成绩/教师导入统一返回结构化汇总：`total`、`imported`、`updated`、`ignored`、`failed`、`errors`（含行号/字段/原因）。
+  - 新增教师导入接口 `POST /api/data-import/teachers`，补齐“三模板下载=三导入入口”的能力一致性。
+  - 学生与成绩导入增加重复数据更新策略，不再出现“重复导入看起来没反应”的体验问题。
+- 前端导入体验改造：
+  - `apps/frontend/src/components/DataImportPanel.tsx` 改为三卡片上传流程（下载模板 -> 选择 CSV -> 上传导入），移除主流程 JSON 大文本输入。
+  - 新增上传中防重复点击、单模块独立反馈、错误明细前 8 条可视展示。
+  - `apps/frontend/src/lib/api.ts` 调整为自动识别 `FormData`，文件上传不再错误设置 `Content-Type: application/json`。
+- 模板与交互样式同步：
+  - `apps/backend/templates/teachers-template.csv` 增加 `subjectName` 列并提供示例值。
+  - `apps/frontend/src/styles.css` 新增文件上传区样式并修复顶部欢迎栏悬浮遮挡问题（取消 sticky，随页面滚动）。
+  - `apps/frontend/src/pages/DashboardPage.tsx` 增加基于角色的路由守卫，防止 URL 直达无权限页面。
+- 文档与演示口径同步：
+  - 更新 `README.md` 与 `GUIDE.md`：导入流程改为 CSV 直传、补充失败行排障、修正导航项。
+  - 更新 `docs/defense-demo-script.md`：修正 pnpm 启动命令为 `pnpm run dev:pnpm`。
+- 验证结果：
+  - 执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）通过。
+  - 执行 `pnpm --config.package-manager-strict=false --filter @ms/backend run build` 通过。
+  - 执行 `pnpm --config.package-manager-strict=false --filter @ms/frontend run build` 通过。
