@@ -1,4 +1,5 @@
-import { type ChangeEvent, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { apiRequest } from "../lib/api";
 import { downloadFile } from "../lib/export";
 
@@ -25,6 +26,14 @@ type ImportSummary = {
         field: string;
         reason: string;
     }>;
+};
+
+type StudentRow = {
+    id: number;
+    studentNo: string;
+    name: string;
+    grade: string;
+    className: string;
 };
 
 type ImportFeedback = {
@@ -83,6 +92,37 @@ export const DataImportPanel = () => {
     const [selectedFiles, setSelectedFiles] = useState<Record<ImportKind, File | null>>(defaultFiles);
     const [feedback, setFeedback] = useState<Record<ImportKind, ImportFeedback | null>>(defaultFeedback);
     const [uploadingKind, setUploadingKind] = useState<ImportKind | null>(null);
+    const [students, setStudents] = useState<StudentRow[]>([]);
+    const [studentKeyword, setStudentKeyword] = useState("");
+    const [deletingStudentId, setDeletingStudentId] = useState<number | null>(null);
+    const [deleteFeedback, setDeleteFeedback] = useState("");
+
+    const loadStudents = async () => {
+        try {
+            const response = await apiRequest<StudentRow[]>("/api/students");
+            const ordered = [...response.data].sort((left, right) => right.id - left.id);
+            setStudents(ordered);
+        } catch (error) {
+            setDeleteFeedback(error instanceof Error ? error.message : "加载学生列表失败");
+        }
+    };
+
+    useEffect(() => {
+        void loadStudents();
+    }, []);
+
+    const filteredStudents = useMemo(() => {
+        const keyword = studentKeyword.trim().toLowerCase();
+        if (!keyword) {
+            return students.slice(0, 12);
+        }
+
+        return students
+            .filter((item) =>
+                [item.studentNo, item.name, item.grade, item.className].some((value) => value.toLowerCase().includes(keyword))
+            )
+            .slice(0, 20);
+    }, [studentKeyword, students]);
 
     const downloadIssuanceRecords = (kind: ImportKind) => {
         const records = feedback[kind]?.summary?.issuanceRecords ?? [];
@@ -90,22 +130,18 @@ export const DataImportPanel = () => {
             return;
         }
 
-        const header = ["username", "temporaryPassword", "displayName", "role", "relatedName"];
-        const lines = [
-            header.join(","),
-            ...records.map((item) =>
-                [item.username, item.temporaryPassword, item.displayName, item.role, item.relatedName]
-                    .map((value) => `"${String(value).replace(/"/g, '""')}"`)
-                    .join(",")
-            )
-        ];
-        const blob = new Blob([`\uFEFF${lines.join("\n")}`], { type: "text/csv;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = `${kind}-account-issuance-${new Date().toISOString().slice(0, 10)}.csv`;
-        anchor.click();
-        URL.revokeObjectURL(url);
+        const worksheet = XLSX.utils.json_to_sheet(
+            records.map((item) => ({
+                账号: item.username,
+                初始密码: item.temporaryPassword,
+                显示名: item.displayName,
+                角色: item.role,
+                关联对象: item.relatedName
+            }))
+        );
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "账号发放单");
+        XLSX.writeFile(workbook, `${kind}-account-issuance-${new Date().toISOString().slice(0, 10)}.xlsx`);
     };
 
     const onFileChange = (kind: ImportKind, event: ChangeEvent<HTMLInputElement>) => {
@@ -172,6 +208,12 @@ export const DataImportPanel = () => {
                     summary
                 }
             }));
+
+            if (summary.issuanceRecords.length > 0) {
+                downloadIssuanceRecords(kind);
+            }
+
+            await loadStudents();
         } catch (err) {
             setFeedback((prev) => ({
                 ...prev,
@@ -187,6 +229,7 @@ export const DataImportPanel = () => {
             <article className="panel-card wide">
                 <h3>真实数据导入（Excel / CSV 直传）</h3>
                 <p>教师可直接下载 Excel 模板填写并上传，系统会兼容 XLSX、UTF-8 CSV 与 GBK/GB18030 CSV。</p>
+                <p className="muted-text">账号初始密码不会在系统中长期明文保存。若导入时生成了新账号，系统会自动下载 Excel 发放单；后续如需再次发放，请到“我的账号”中重置密码。</p>
             </article>
 
             {IMPORT_CONFIG.map((config) => {
@@ -259,6 +302,86 @@ export const DataImportPanel = () => {
                     </article>
                 );
             })}
+
+            <article className="panel-card wide">
+                <h3>学生数据清理</h3>
+                <p>用于删除误导入、乱码或测试学生。删除后会一并移除该学生的成绩、画像、预警、选课建议及学生账号，请谨慎操作。</p>
+                <div className="inline-form section-actions">
+                    <label>
+                        搜索学生
+                        <input
+                            value={studentKeyword}
+                            onChange={(event) => {
+                                setStudentKeyword(event.target.value);
+                                setDeleteFeedback("");
+                            }}
+                            placeholder="输入学号、姓名、年级或班级"
+                        />
+                    </label>
+                </div>
+                {deleteFeedback ? <p className={deleteFeedback.includes("已删除") ? "success-text" : "error-text"}>{deleteFeedback}</p> : null}
+                <div className="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>学号</th>
+                                <th>姓名</th>
+                                <th>年级</th>
+                                <th>班级</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filteredStudents.map((item) => (
+                                <tr key={item.id}>
+                                    <td>{item.studentNo}</td>
+                                    <td>{item.name}</td>
+                                    <td>{item.grade}</td>
+                                    <td>{item.className}</td>
+                                    <td>
+                                        <button
+                                            type="button"
+                                            className="secondary-btn"
+                                            disabled={deletingStudentId === item.id}
+                                            onClick={async () => {
+                                                const confirmed = window.confirm(
+                                                    `确定删除学生 ${item.name}（${item.studentNo}）吗？该操作会同时删除该学生账号及相关成绩、画像、预警与推荐数据。`
+                                                );
+                                                if (!confirmed) {
+                                                    return;
+                                                }
+
+                                                setDeleteFeedback("");
+                                                setDeletingStudentId(item.id);
+                                                try {
+                                                    const response = await apiRequest<{ name: string; studentNo: string }>(`/api/students/${item.id}`, {
+                                                        method: "DELETE"
+                                                    });
+                                                    setDeleteFeedback(`${response.message}（${item.studentNo}）`);
+                                                    await loadStudents();
+                                                } catch (error) {
+                                                    setDeleteFeedback(error instanceof Error ? error.message : "删除学生失败");
+                                                } finally {
+                                                    setDeletingStudentId(null);
+                                                }
+                                            }}
+                                        >
+                                            {deletingStudentId === item.id ? "删除中..." : "删除学生"}
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                            {filteredStudents.length === 0 ? (
+                                <tr>
+                                    <td colSpan={5} className="muted-text">
+                                        未找到匹配学生。
+                                    </td>
+                                </tr>
+                            ) : null}
+                        </tbody>
+                    </table>
+                </div>
+            </article>
         </section>
     );
 };

@@ -338,3 +338,14 @@
   - `apps/frontend/src/styles.css` 调整工具区栅格与按钮占位，修复生涯页中等宽度下选择框重叠问题。
 - 文档同步更新：
   - 更新 `README.md`、`GUIDE.md`、`docs/evaluation-checklist.md`、`docs/defense-demo-script.md`，统一为“后台发号 + Excel/CSV 导入 + 备案/反爬已配置”的口径。
+
+## 2026-04-21 21:57:14 +0800
+
+- 进一步优化账号发放与数据清理体验：
+  - `apps/frontend/src/components/DataImportPanel.tsx` 将账号发放单升级为自动生成并下载 Excel（`.xlsx`）版本，不再仅导出 CSV。
+  - 导入页补充“密码不长期明文保存”的安全提示，并指向“我的账号”中的重置密码能力。
+  - 导入页新增学生数据清理区，支持按学号/姓名搜索并删除误导入、乱码或测试学生。
+- 后端新增学生删除能力：
+  - `apps/backend/src/routes/students.ts` 新增删除接口，删除学生时会一并清理该学生的成绩、行为、画像、预警、请假、选课建议、家长关联与学生账号，并写入审计日志。
+- 工程依赖更新：
+  - `apps/frontend/package.json` 新增 `xlsx`，用于浏览器端生成 Excel 发放单。

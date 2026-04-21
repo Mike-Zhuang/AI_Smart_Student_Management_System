@@ -254,3 +254,105 @@ studentsRouter.patch("/:id/subject-selection", requireAuth, (req: AuthedRequest,
         }
     });
 });
+
+studentsRouter.delete("/:id", requireAuth, (req: AuthedRequest, res) => {
+    if (!req.user) {
+        res.status(401).json({ success: false, message: "未登录" });
+        return;
+    }
+
+    const studentId = Number(req.params.id);
+    if (Number.isNaN(studentId)) {
+        res.status(400).json({ success: false, message: "学生ID不合法" });
+        return;
+    }
+
+    const canDeleteRole =
+        req.user.role === ROLES.ADMIN || req.user.role === ROLES.TEACHER || req.user.role === ROLES.HEAD_TEACHER;
+    if (!canDeleteRole) {
+        res.status(403).json({ success: false, message: "当前角色无权限删除学生" });
+        return;
+    }
+
+    if (!canAccessStudent(req, studentId)) {
+        res.status(403).json({ success: false, message: "无权删除该学生" });
+        return;
+    }
+
+    const student = db
+        .prepare(
+            `SELECT id, student_no as studentNo, name, grade, class_name as className
+             FROM students
+             WHERE id = ?`
+        )
+        .get(studentId) as
+        | {
+            id: number;
+            studentNo: string;
+            name: string;
+            grade: string;
+            className: string;
+        }
+        | undefined;
+
+    if (!student) {
+        res.status(404).json({ success: false, message: "学生不存在" });
+        return;
+    }
+
+    const countBeforeDelete = (tableName: string, fieldName = "student_id"): number => {
+        const row = db.prepare(`SELECT COUNT(*) as count FROM ${tableName} WHERE ${fieldName} = ?`).get(studentId) as { count: number };
+        return row.count;
+    };
+
+    const studentAccountCount = db
+        .prepare(
+            `SELECT COUNT(*) as count
+             FROM users
+             WHERE linked_student_id = ? AND role = ?`
+        )
+        .get(studentId, ROLES.STUDENT) as { count: number };
+
+    const summary = {
+        studentNo: student.studentNo,
+        name: student.name,
+        examResultCount: countBeforeDelete("exam_results"),
+        behaviorRecordCount: countBeforeDelete("behavior_records"),
+        growthProfileCount: countBeforeDelete("growth_profiles"),
+        alertCount: countBeforeDelete("alerts"),
+        leaveRequestCount: countBeforeDelete("leave_requests"),
+        recommendationCount: countBeforeDelete("career_recommendations"),
+        parentLinkCount: countBeforeDelete("parent_student_links"),
+        studentAccountCount: studentAccountCount.count
+    };
+
+    const runDelete = db.transaction(() => {
+        db.prepare(`DELETE FROM exam_results WHERE student_id = ?`).run(studentId);
+        db.prepare(`DELETE FROM behavior_records WHERE student_id = ?`).run(studentId);
+        db.prepare(`DELETE FROM growth_profiles WHERE student_id = ?`).run(studentId);
+        db.prepare(`DELETE FROM alerts WHERE student_id = ?`).run(studentId);
+        db.prepare(`DELETE FROM leave_requests WHERE student_id = ?`).run(studentId);
+        db.prepare(`DELETE FROM career_recommendations WHERE student_id = ?`).run(studentId);
+        db.prepare(`DELETE FROM parent_student_links WHERE student_id = ?`).run(studentId);
+        db.prepare(`DELETE FROM users WHERE linked_student_id = ? AND role = ?`).run(studentId, ROLES.STUDENT);
+        db.prepare(`DELETE FROM students WHERE id = ?`).run(studentId);
+    });
+
+    runDelete();
+
+    logAudit({
+        userId: req.user.id,
+        actionModule: "students",
+        actionType: "student_delete",
+        objectType: "student",
+        objectId: studentId,
+        detail: summary,
+        ipAddress: extractIp(req)
+    });
+
+    res.json({
+        success: true,
+        message: `学生 ${student.name} 已删除`,
+        data: summary
+    });
+});
