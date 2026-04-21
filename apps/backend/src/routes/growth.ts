@@ -28,16 +28,49 @@ growthRouter.get("/students/:studentId/profile", requireAuth, (req: AuthedReques
               subject_combination as subjectCombination, interests, career_goal as careerGoal
        FROM students WHERE id = ?`
         )
-        .get(studentId);
+        .get(studentId) as
+        | {
+            id: number;
+            studentNo: string;
+            name: string;
+            grade: string;
+            className: string;
+            subjectCombination: string | null;
+            interests: string | null;
+            careerGoal: string | null;
+        }
+        | undefined;
+
+    if (!student) {
+        res.status(404).json({ success: false, message: "学生不存在" });
+        return;
+    }
 
     const profile = db
         .prepare(
             `SELECT summary, risk_level as riskLevel, last_updated as lastUpdated
        FROM growth_profiles WHERE student_id = ?`
         )
-        .get(studentId);
+        .get(studentId) as
+        | {
+            summary: string;
+            riskLevel: string;
+            lastUpdated: string;
+        }
+        | undefined;
 
-    res.json({ success: true, message: "查询成功", data: { student, profile } });
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: {
+            student,
+            profile: profile ?? {
+                summary: "暂无成长画像，请先完成数据导入或等待系统生成。",
+                riskLevel: "",
+                lastUpdated: ""
+            }
+        }
+    });
 });
 
 growthRouter.get("/students/:studentId/trends", requireAuth, (req: AuthedRequest, res) => {

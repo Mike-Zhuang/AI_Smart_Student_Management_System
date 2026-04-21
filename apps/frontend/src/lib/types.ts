@@ -6,6 +6,7 @@ export type User = {
   displayName: string;
   role: Role;
   linkedStudentId: number | null;
+  mustChangePassword: boolean;
   phone?: string | null;
   email?: string | null;
 };

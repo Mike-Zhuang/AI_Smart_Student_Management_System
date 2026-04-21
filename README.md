@@ -93,9 +93,15 @@ pnpm run build:pnpm
 - Debug Backend Only：仅后端
 - Debug Frontend (Manual Browser)：仅前端并手动打开浏览器
 
-## 4. 演示账号与角色
+## 4. 账号与角色
 
-可直接用于演示：
+内部使用建议：
+
+- 线上环境不开放公开注册。
+- 新账号由管理员/班主任/教师在后台导入数据后统一发放。
+- 首次拿到系统分配的初始密码后，建议登录后立即在“我的账号”中修改密码。
+
+本地演示环境仍保留示例账号，便于开发联调：
 
 - admin / admin123
 - teacher_zhang / teacher123
@@ -140,20 +146,24 @@ pnpm run build:pnpm
 
 ### 6.2 真实数据导入
 
-当前版本默认采用 CSV 直传导入，不需要手工转换 JSON。
+当前版本默认采用 Excel/CSV 直传导入，不需要手工转换 JSON。
 
 页面操作流程：
 
 1. 下载对应模板（学生/成绩/教师班级）
-2. 在 Excel 或 WPS 中填写 CSV 数据
-3. 回到“数据导入”上传 CSV 文件
+2. 在 Excel 或 WPS 中填写 XLSX 模板，或继续使用 CSV
+3. 回到“数据导入”上传 XLSX / CSV 文件
 4. 查看导入结果统计与逐行错误提示
+5. 若系统生成了新账号，请立即下载一次性账号发放单
 
 模板文件：
 
 - apps/backend/templates/students-template.csv
 - apps/backend/templates/exam-results-template.csv
 - apps/backend/templates/teachers-template.csv
+- apps/backend/templates/students-template.xlsx
+- apps/backend/templates/exam-results-template.xlsx
+- apps/backend/templates/teachers-template.xlsx
 
 导入接口：
 
@@ -164,7 +174,8 @@ pnpm run build:pnpm
 说明：
 
 - 导入结果会返回 `total/imported/updated/failed/errors` 统计。
-- 仅管理员和班主任角色可见并可执行数据导入。
+- 管理员、班主任、教师均可执行数据导入与账号发放。
+- 学生导入会自动同步学生账号，教师导入会自动同步教师账号。
 
 ## 7. 部署说明（简版）
 
@@ -211,6 +222,16 @@ pnpm run build:pnpm
 2. 对照模板修正后重新上传同一 CSV
 3. 若仍失败，先用 1-3 行小样本验证再批量导入
 
+### 8.5 中文导入乱码怎么办
+
+当前版本已兼容：
+
+1. UTF-8 CSV
+2. GBK / GB18030 CSV
+3. XLSX
+
+若老师不熟悉 CSV，优先使用系统提供的 XLSX 模板即可。
+
 ## 9. 推荐阅读文档
 
 - GUIDE.md：完整用户操作手册
@@ -229,6 +250,9 @@ pnpm run build:pnpm
 - 基础限流
 - Helmet 安全头
 - 审计日志
+- 关闭公开注册
+- 首页备案号挂载
+- `robots.txt` + `noindex,nofollow` 反爬配置
 
 注意：
 

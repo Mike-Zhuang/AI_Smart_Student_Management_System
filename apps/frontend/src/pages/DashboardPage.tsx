@@ -24,7 +24,7 @@ const SECTION_ROLES: Record<string, User["role"][]> = {
     teaching: ["admin", "teacher", "head_teacher"],
     "ai-lab": ["admin", "teacher", "head_teacher", "parent", "student"],
     account: ["admin", "teacher", "head_teacher", "parent", "student"],
-    "data-import": ["admin", "head_teacher"]
+    "data-import": ["admin", "teacher", "head_teacher"]
 };
 
 export const DashboardPage = () => {

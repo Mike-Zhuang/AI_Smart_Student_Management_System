@@ -5,19 +5,30 @@ import { parse } from "csv-parse/sync";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import multer from "multer";
+import iconv from "iconv-lite";
+import XLSX from "xlsx";
 import { z } from "zod";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { generateTemporaryPassword, hashPassword } from "../utils/auth.js";
 
-type CsvRecord = Record<string, unknown>;
+type SheetRecord = Record<string, unknown>;
 
 type ImportErrorItem = {
     line: number;
     field: string;
     reason: string;
+};
+
+type AccountIssueRecord = {
+    username: string;
+    temporaryPassword: string;
+    displayName: string;
+    role: string;
+    relatedName: string;
 };
 
 type ImportSummary = {
@@ -27,6 +38,10 @@ type ImportSummary = {
     ignored: number;
     failed: number;
     errors: ImportErrorItem[];
+    accountCreated: number;
+    accountUpdated: number;
+    accountExisting: number;
+    issuanceRecords: AccountIssueRecord[];
 };
 
 type StudentImportRow = {
@@ -37,6 +52,8 @@ type StudentImportRow = {
     subjectCombination?: string;
     interests?: string;
     careerGoal?: string;
+    loginUsername?: string;
+    displayName?: string;
 };
 
 type ExamImportRow = {
@@ -49,10 +66,13 @@ type ExamImportRow = {
 
 type TeacherImportRow = {
     teacherUsername: string;
+    displayName: string;
     className: string;
     isHeadTeacher: number;
     subjectName?: string;
 };
+
+type AccountSyncResult = "created" | "updated" | "existing";
 
 const studentRowSchema = z.object({
     studentNo: z.string().min(4, "学号长度至少4位"),
@@ -61,7 +81,9 @@ const studentRowSchema = z.object({
     className: z.string().min(2, "班级不能为空"),
     subjectCombination: z.string().optional(),
     interests: z.string().optional(),
-    careerGoal: z.string().optional()
+    careerGoal: z.string().optional(),
+    loginUsername: z.string().min(4, "登录账号长度至少4位").optional(),
+    displayName: z.string().min(2, "显示名长度至少2位").optional()
 });
 
 const examRowSchema = z.object({
@@ -73,21 +95,28 @@ const examRowSchema = z.object({
 });
 
 const teacherRowSchema = z.object({
-    teacherUsername: z.string().min(2, "教师账号不能为空"),
+    teacherUsername: z.string().min(2, "教师登录账号不能为空"),
+    displayName: z.string().min(2, "教师姓名不能为空"),
     className: z.string().min(2, "班级不能为空"),
     subjectName: z.string().optional()
 });
 
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 },
+    limits: { fileSize: 8 * 1024 * 1024 },
     fileFilter: (_req, file, callback) => {
         const mime = file.mimetype.toLowerCase();
         const filename = file.originalname.toLowerCase();
         const isCsvMime = ["text/csv", "application/csv", "application/vnd.ms-excel", "text/plain"].includes(mime);
+        const isXlsxMime = [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/octet-stream",
+            "application/zip"
+        ].includes(mime);
         const isCsvName = filename.endsWith(".csv");
-        if (!isCsvMime && !isCsvName) {
-            callback(new Error("仅支持CSV文件上传"));
+        const isXlsxName = filename.endsWith(".xlsx");
+        if ((!isCsvMime && !isCsvName) && (!isXlsxMime && !isXlsxName)) {
+            callback(new Error("仅支持 CSV 或 XLSX 文件上传"));
             return;
         }
         callback(null, true);
@@ -100,7 +129,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const templateDir = path.resolve(__dirname, "../../templates");
 
-const uploadCsv = (req: AuthedRequest, res: Response, next: NextFunction): void => {
+const uploadSheet = (req: AuthedRequest, res: Response, next: NextFunction): void => {
     upload.single("file")(req, res, (error: unknown) => {
         if (!error) {
             next();
@@ -109,10 +138,10 @@ const uploadCsv = (req: AuthedRequest, res: Response, next: NextFunction): void 
 
         if (error instanceof multer.MulterError) {
             if (error.code === "LIMIT_FILE_SIZE") {
-                res.status(400).json({ success: false, message: "上传文件过大，最大支持5MB" });
+                res.status(400).json({ success: false, message: "上传文件过大，最大支持8MB" });
                 return;
             }
-            res.status(400).json({ success: false, message: "文件上传失败，请检查CSV格式" });
+            res.status(400).json({ success: false, message: "文件上传失败，请检查表格格式" });
             return;
         }
 
@@ -121,29 +150,68 @@ const uploadCsv = (req: AuthedRequest, res: Response, next: NextFunction): void 
     });
 };
 
-const normalizeRecord = (record: CsvRecord): CsvRecord => {
-    const normalized: CsvRecord = {};
-    for (const [rawKey, value] of Object.entries(record)) {
-        const key = rawKey.trim();
-        normalized[key] = value;
+const cleanCell = (value: unknown): string => {
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    return String(value)
+        .replace(/^\uFEFF/, "")
+        .replace(/\u00A0/g, " ")
+        .replace(/\r/g, "")
+        .trim();
+};
+
+const normalizeRecord = (record: SheetRecord): SheetRecord => {
+    const normalized: SheetRecord = {};
+    for (const [rawKey, rawValue] of Object.entries(record)) {
+        const key = cleanCell(rawKey);
+        normalized[key] = typeof rawValue === "string" ? cleanCell(rawValue) : rawValue;
     }
     return normalized;
 };
 
-const parseCsvRows = (buffer: Buffer): CsvRecord[] => {
-    const text = buffer.toString("utf-8");
+const decodeCsvBuffer = (buffer: Buffer): string => {
+    if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+        return buffer.toString("utf-8");
+    }
+
+    try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    } catch {
+        return iconv.decode(buffer, "gb18030");
+    }
+};
+
+const parseCsvRows = (buffer: Buffer): SheetRecord[] => {
+    const text = decodeCsvBuffer(buffer);
     const rows = parse(text, {
         columns: true,
         skip_empty_lines: true,
         trim: true,
         bom: true
-    }) as CsvRecord[];
+    }) as SheetRecord[];
     return rows.map(normalizeRecord);
 };
 
-const tryParseJsonRows = (value: unknown): CsvRecord[] | null => {
+const parseXlsxRows = (buffer: Buffer): SheetRecord[] => {
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const firstSheetName = workbook.SheetNames[0];
+    const worksheet = firstSheetName ? workbook.Sheets[firstSheetName] : null;
+    if (!worksheet) {
+        return [];
+    }
+
+    const rows = XLSX.utils.sheet_to_json<SheetRecord>(worksheet, {
+        defval: "",
+        raw: false
+    });
+    return rows.map(normalizeRecord);
+};
+
+const tryParseJsonRows = (value: unknown): SheetRecord[] | null => {
     if (Array.isArray(value)) {
-        return value.map((item) => (item && typeof item === "object" ? (item as CsvRecord) : {}));
+        return value.map((item) => (item && typeof item === "object" ? normalizeRecord(item as SheetRecord) : {}));
     }
 
     if (typeof value === "string") {
@@ -152,7 +220,7 @@ const tryParseJsonRows = (value: unknown): CsvRecord[] | null => {
             if (!Array.isArray(parsed)) {
                 return null;
             }
-            return parsed.map((item) => (item && typeof item === "object" ? (item as CsvRecord) : {}));
+            return parsed.map((item) => (item && typeof item === "object" ? normalizeRecord(item as SheetRecord) : {}));
         } catch {
             return null;
         }
@@ -161,10 +229,16 @@ const tryParseJsonRows = (value: unknown): CsvRecord[] | null => {
     return null;
 };
 
-const resolveRows = (req: AuthedRequest): { rows: CsvRecord[]; lineOffset: number } | null => {
+const resolveRows = (req: AuthedRequest): { rows: SheetRecord[]; lineOffset: number; source: "csv" | "xlsx" | "json" } | null => {
     if (req.file) {
         try {
-            return { rows: parseCsvRows(req.file.buffer), lineOffset: 2 };
+            const filename = req.file.originalname.toLowerCase();
+            const isXlsx = filename.endsWith(".xlsx");
+            return {
+                rows: isXlsx ? parseXlsxRows(req.file.buffer) : parseCsvRows(req.file.buffer),
+                lineOffset: 2,
+                source: isXlsx ? "xlsx" : "csv"
+            };
         } catch {
             return null;
         }
@@ -175,10 +249,10 @@ const resolveRows = (req: AuthedRequest): { rows: CsvRecord[]; lineOffset: numbe
         return null;
     }
 
-    return { rows, lineOffset: 1 };
+    return { rows, lineOffset: 1, source: "json" };
 };
 
-const pickValue = (row: CsvRecord, aliases: string[]): unknown => {
+const pickValue = (row: SheetRecord, aliases: string[]): unknown => {
     for (const alias of aliases) {
         if (Object.prototype.hasOwnProperty.call(row, alias)) {
             return row[alias];
@@ -187,15 +261,7 @@ const pickValue = (row: CsvRecord, aliases: string[]): unknown => {
     return undefined;
 };
 
-const toRequiredString = (value: unknown): string => {
-    if (typeof value === "string") {
-        return value.trim();
-    }
-    if (value === null || value === undefined) {
-        return "";
-    }
-    return String(value).trim();
-};
+const toRequiredString = (value: unknown): string => cleanCell(value);
 
 const toOptionalString = (value: unknown): string | undefined => {
     const text = toRequiredString(value);
@@ -209,7 +275,7 @@ const appendZodErrors = (target: ImportErrorItem[], line: number, error: z.ZodEr
     }
 };
 
-const parseStudentRow = (row: CsvRecord, line: number, errors: ImportErrorItem[]): StudentImportRow | null => {
+const parseStudentRow = (row: SheetRecord, line: number, errors: ImportErrorItem[]): StudentImportRow | null => {
     const candidate = {
         studentNo: toRequiredString(pickValue(row, ["studentNo", "student_no", "学号"])),
         name: toRequiredString(pickValue(row, ["name", "姓名"])),
@@ -217,7 +283,9 @@ const parseStudentRow = (row: CsvRecord, line: number, errors: ImportErrorItem[]
         className: toRequiredString(pickValue(row, ["className", "class_name", "班级"])),
         subjectCombination: toOptionalString(pickValue(row, ["subjectCombination", "subject_combination", "选科组合"])),
         interests: toOptionalString(pickValue(row, ["interests", "兴趣"])),
-        careerGoal: toOptionalString(pickValue(row, ["careerGoal", "career_goal", "职业目标"]))
+        careerGoal: toOptionalString(pickValue(row, ["careerGoal", "career_goal", "职业目标"])),
+        loginUsername: toOptionalString(pickValue(row, ["loginUsername", "username", "登录账号"])),
+        displayName: toOptionalString(pickValue(row, ["displayName", "显示名"]))
     };
 
     const parsed = studentRowSchema.safeParse(candidate);
@@ -229,7 +297,7 @@ const parseStudentRow = (row: CsvRecord, line: number, errors: ImportErrorItem[]
     return parsed.data;
 };
 
-const parseExamRow = (row: CsvRecord, line: number, errors: ImportErrorItem[]): ExamImportRow | null => {
+const parseExamRow = (row: SheetRecord, line: number, errors: ImportErrorItem[]): ExamImportRow | null => {
     const scoreRaw = pickValue(row, ["score", "分数"]);
     const score = typeof scoreRaw === "number" ? scoreRaw : Number(toRequiredString(scoreRaw));
 
@@ -252,10 +320,7 @@ const parseExamRow = (row: CsvRecord, line: number, errors: ImportErrorItem[]): 
 
 const parseHeadTeacherFlag = (value: unknown): number | null => {
     if (typeof value === "number") {
-        if (value === 0 || value === 1) {
-            return value;
-        }
-        return null;
+        return value === 1 ? 1 : value === 0 ? 0 : null;
     }
 
     const text = toRequiredString(value).toLowerCase();
@@ -268,7 +333,7 @@ const parseHeadTeacherFlag = (value: unknown): number | null => {
     return null;
 };
 
-const parseTeacherRow = (row: CsvRecord, line: number, errors: ImportErrorItem[]): TeacherImportRow | null => {
+const parseTeacherRow = (row: SheetRecord, line: number, errors: ImportErrorItem[]): TeacherImportRow | null => {
     const flag = parseHeadTeacherFlag(pickValue(row, ["isHeadTeacher", "is_head_teacher", "是否班主任"]));
     if (flag === null) {
         errors.push({ line, field: "isHeadTeacher", reason: "是否班主任仅支持0/1或true/false" });
@@ -276,7 +341,8 @@ const parseTeacherRow = (row: CsvRecord, line: number, errors: ImportErrorItem[]
     }
 
     const candidate = {
-        teacherUsername: toRequiredString(pickValue(row, ["teacherUsername", "teacher_username", "教师账号"])),
+        teacherUsername: toRequiredString(pickValue(row, ["teacherUsername", "teacher_username", "登录账号", "教师账号"])),
+        displayName: toRequiredString(pickValue(row, ["displayName", "teacherName", "name", "教师姓名", "姓名"])),
         className: toRequiredString(pickValue(row, ["className", "class_name", "班级"])),
         subjectName: toOptionalString(pickValue(row, ["subjectName", "subject_name", "任教学科"]))
     };
@@ -299,36 +365,202 @@ const buildSummary = (total: number): ImportSummary => ({
     updated: 0,
     ignored: 0,
     failed: 0,
-    errors: []
+    errors: [],
+    accountCreated: 0,
+    accountUpdated: 0,
+    accountExisting: 0,
+    issuanceRecords: []
 });
 
-const calcFailedLineCount = (errors: ImportErrorItem[]): number => {
-    return new Set(errors.map((item) => item.line)).size;
+const calcFailedLineCount = (errors: ImportErrorItem[]): number => new Set(errors.map((item) => item.line)).size;
+
+const recordAccountSync = (summary: ImportSummary, result: AccountSyncResult): void => {
+    if (result === "created") {
+        summary.accountCreated += 1;
+        return;
+    }
+    if (result === "updated") {
+        summary.accountUpdated += 1;
+        return;
+    }
+    summary.accountExisting += 1;
 };
 
-dataImportRouter.use(requireAuth, requireRole(ROLES.ADMIN, ROLES.HEAD_TEACHER));
+const syncStudentAccount = (row: StudentImportRow, studentId: number, summary: ImportSummary): void => {
+    const username = row.loginUsername ?? row.studentNo;
+    const displayName = row.displayName ?? row.name;
+    const existing = db
+        .prepare(
+            `SELECT id, display_name as displayName, role, linked_student_id as linkedStudentId
+             FROM users
+             WHERE username = ?`
+        )
+        .get(username) as
+        | { id: number; displayName: string; role: string; linkedStudentId: number | null }
+        | undefined;
+
+    if (!existing) {
+        const temporaryPassword = generateTemporaryPassword();
+        db.prepare(
+            `INSERT INTO users (
+                username,
+                display_name,
+                password_hash,
+                role,
+                linked_student_id,
+                must_change_password,
+                password_reset_at,
+                is_active,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, 1, ?, 1, ?)`
+        ).run(
+            username,
+            displayName,
+            hashPassword(temporaryPassword),
+            ROLES.STUDENT,
+            studentId,
+            dayjs().toISOString(),
+            dayjs().toISOString()
+        );
+
+        summary.issuanceRecords.push({
+            username,
+            temporaryPassword,
+            displayName,
+            role: ROLES.STUDENT,
+            relatedName: `${row.name} / ${row.studentNo}`
+        });
+        recordAccountSync(summary, "created");
+        return;
+    }
+
+    const nextRole = ROLES.STUDENT;
+    const shouldUpdate =
+        existing.displayName !== displayName ||
+        existing.linkedStudentId !== studentId ||
+        existing.role !== nextRole;
+
+    if (!shouldUpdate) {
+        recordAccountSync(summary, "existing");
+        return;
+    }
+
+    db.prepare(
+        `UPDATE users
+         SET display_name = ?, role = ?, linked_student_id = ?, is_active = 1
+         WHERE id = ?`
+    ).run(displayName, nextRole, studentId, existing.id);
+    recordAccountSync(summary, "updated");
+};
+
+const syncTeacherAccount = (row: TeacherImportRow, summary: ImportSummary): number => {
+    const displayName = row.displayName;
+    const desiredRole = row.isHeadTeacher === 1 ? ROLES.HEAD_TEACHER : ROLES.TEACHER;
+    const existing = db
+        .prepare(
+            `SELECT id, display_name as displayName, role
+             FROM users
+             WHERE username = ?`
+        )
+        .get(row.teacherUsername) as
+        | { id: number; displayName: string; role: string }
+        | undefined;
+
+    if (!existing) {
+        const temporaryPassword = generateTemporaryPassword();
+        const result = db.prepare(
+            `INSERT INTO users (
+                username,
+                display_name,
+                password_hash,
+                role,
+                linked_student_id,
+                must_change_password,
+                password_reset_at,
+                is_active,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, NULL, 1, ?, 1, ?)`
+        ).run(
+            row.teacherUsername,
+            displayName,
+            hashPassword(temporaryPassword),
+            desiredRole,
+            dayjs().toISOString(),
+            dayjs().toISOString()
+        );
+
+        summary.issuanceRecords.push({
+            username: row.teacherUsername,
+            temporaryPassword,
+            displayName,
+            role: desiredRole,
+            relatedName: `${displayName} / ${row.className}`
+        });
+        recordAccountSync(summary, "created");
+        return Number(result.lastInsertRowid);
+    }
+
+    const nextRole = existing.role === ROLES.ADMIN ? ROLES.ADMIN : desiredRole;
+    const shouldUpdate = existing.displayName !== displayName || existing.role !== nextRole;
+    if (shouldUpdate) {
+        db.prepare(
+            `UPDATE users
+             SET display_name = ?, role = ?, is_active = 1
+             WHERE id = ?`
+        ).run(displayName, nextRole, existing.id);
+        recordAccountSync(summary, "updated");
+    } else {
+        recordAccountSync(summary, "existing");
+    }
+
+    return existing.id;
+};
+
+dataImportRouter.use(requireAuth, requireRole(ROLES.ADMIN, ROLES.HEAD_TEACHER, ROLES.TEACHER));
 
 dataImportRouter.get("/templates", (_req, res) => {
     res.json({
         success: true,
         message: "模板字段",
         data: {
-            students: ["studentNo", "name", "grade", "className", "subjectCombination", "interests", "careerGoal"],
+            students: [
+                "studentNo",
+                "name",
+                "grade",
+                "className",
+                "subjectCombination",
+                "interests",
+                "careerGoal",
+                "loginUsername",
+                "displayName"
+            ],
             examResults: ["studentNo", "examName", "examDate", "subject", "score"],
-            teachers: ["teacherUsername", "className", "isHeadTeacher", "subjectName"]
+            teachers: ["teacherUsername", "displayName", "className", "isHeadTeacher", "subjectName"]
         }
     });
 });
 
 dataImportRouter.get("/template-files/:type", (req, res) => {
     const type = req.params.type;
-    const map: Record<string, string> = {
-        students: "students-template.csv",
-        "exam-results": "exam-results-template.csv",
-        teachers: "teachers-template.csv"
+    const format = req.query.format === "csv" ? "csv" : "xlsx";
+    const map: Record<string, Record<"csv" | "xlsx", string>> = {
+        students: {
+            csv: "students-template.csv",
+            xlsx: "students-template.xlsx"
+        },
+        "exam-results": {
+            csv: "exam-results-template.csv",
+            xlsx: "exam-results-template.xlsx"
+        },
+        teachers: {
+            csv: "teachers-template.csv",
+            xlsx: "teachers-template.xlsx"
+        }
     };
 
-    const filename = map[type];
+    const filename = map[type]?.[format];
     if (!filename) {
         res.status(400).json({ success: false, message: "不支持的模板类型" });
         return;
@@ -341,14 +573,14 @@ dataImportRouter.get("/template-files/:type", (req, res) => {
     });
 });
 
-dataImportRouter.post("/students", uploadCsv, (req: AuthedRequest, res) => {
+dataImportRouter.post("/students", uploadSheet, (req: AuthedRequest, res) => {
     const resolved = resolveRows(req);
     if (!resolved) {
-        res.status(400).json({ success: false, message: "请上传CSV文件，或传入JSON格式 rows 数组" });
+        res.status(400).json({ success: false, message: "请上传 CSV/XLSX 文件，或传入 JSON 格式 rows 数组" });
         return;
     }
 
-    const { rows, lineOffset } = resolved;
+    const { rows, lineOffset, source } = resolved;
     const summary = buildSummary(rows.length);
     const validRows: Array<{ line: number; data: StudentImportRow }> = [];
 
@@ -367,12 +599,7 @@ dataImportRouter.post("/students", uploadCsv, (req: AuthedRequest, res) => {
     );
     const updateStudent = db.prepare(
         `UPDATE students
-         SET name = ?,
-             grade = ?,
-             class_name = ?,
-             subject_combination = ?,
-             interests = ?,
-             career_goal = ?
+         SET name = ?, grade = ?, class_name = ?, subject_combination = ?, interests = ?, career_goal = ?
          WHERE student_no = ?`
     );
 
@@ -380,6 +607,8 @@ dataImportRouter.post("/students", uploadCsv, (req: AuthedRequest, res) => {
         for (const item of items) {
             const row = item.data;
             const existed = findByStudentNo.get(row.studentNo) as { id: number } | undefined;
+            let studentId: number;
+
             if (existed) {
                 updateStudent.run(
                     row.name,
@@ -390,9 +619,10 @@ dataImportRouter.post("/students", uploadCsv, (req: AuthedRequest, res) => {
                     row.careerGoal ?? null,
                     row.studentNo
                 );
+                studentId = existed.id;
                 summary.updated += 1;
             } else {
-                insertStudent.run(
+                const result = insertStudent.run(
                     row.studentNo,
                     row.name,
                     row.grade,
@@ -402,8 +632,11 @@ dataImportRouter.post("/students", uploadCsv, (req: AuthedRequest, res) => {
                     row.careerGoal ?? null,
                     dayjs().toISOString()
                 );
+                studentId = Number(result.lastInsertRowid);
                 summary.imported += 1;
             }
+
+            syncStudentAccount(row, studentId, summary);
         }
     });
 
@@ -416,7 +649,7 @@ dataImportRouter.post("/students", uploadCsv, (req: AuthedRequest, res) => {
             actionModule: "data-import",
             actionType: "import_students",
             objectType: "students",
-            detail: { source: req.file ? "csv" : "json", ...summary },
+            detail: { source, ...summary, issuanceCount: summary.issuanceRecords.length },
             ipAddress: extractIp(req)
         });
     }
@@ -425,14 +658,14 @@ dataImportRouter.post("/students", uploadCsv, (req: AuthedRequest, res) => {
     res.json({ success: true, message, data: summary });
 });
 
-dataImportRouter.post("/exam-results", uploadCsv, (req: AuthedRequest, res) => {
+dataImportRouter.post("/exam-results", uploadSheet, (req: AuthedRequest, res) => {
     const resolved = resolveRows(req);
     if (!resolved) {
-        res.status(400).json({ success: false, message: "请上传CSV文件，或传入JSON格式 rows 数组" });
+        res.status(400).json({ success: false, message: "请上传 CSV/XLSX 文件，或传入 JSON 格式 rows 数组" });
         return;
     }
 
-    const { rows, lineOffset } = resolved;
+    const { rows, lineOffset, source } = resolved;
     const summary = buildSummary(rows.length);
     const validRows: Array<{ line: number; data: ExamImportRow }> = [];
 
@@ -486,7 +719,7 @@ dataImportRouter.post("/exam-results", uploadCsv, (req: AuthedRequest, res) => {
             actionModule: "data-import",
             actionType: "import_exam_results",
             objectType: "exam_results",
-            detail: { source: req.file ? "csv" : "json", ...summary },
+            detail: { source, ...summary },
             ipAddress: extractIp(req)
         });
     }
@@ -495,14 +728,14 @@ dataImportRouter.post("/exam-results", uploadCsv, (req: AuthedRequest, res) => {
     res.json({ success: true, message, data: summary });
 });
 
-dataImportRouter.post("/teachers", uploadCsv, (req: AuthedRequest, res) => {
+dataImportRouter.post("/teachers", uploadSheet, (req: AuthedRequest, res) => {
     const resolved = resolveRows(req);
     if (!resolved) {
-        res.status(400).json({ success: false, message: "请上传CSV文件，或传入JSON格式 rows 数组" });
+        res.status(400).json({ success: false, message: "请上传 CSV/XLSX 文件，或传入 JSON 格式 rows 数组" });
         return;
     }
 
-    const { rows, lineOffset } = resolved;
+    const { rows, lineOffset, source } = resolved;
     const summary = buildSummary(rows.length);
     const validRows: Array<{ line: number; data: TeacherImportRow }> = [];
 
@@ -514,12 +747,6 @@ dataImportRouter.post("/teachers", uploadCsv, (req: AuthedRequest, res) => {
         }
     });
 
-    const findTeacher = db.prepare(
-        `SELECT id, role
-         FROM users
-         WHERE username = ? AND role IN (?, ?, ?)
-         LIMIT 1`
-    );
     const findLink = db.prepare(
         `SELECT id
          FROM teacher_class_links
@@ -532,30 +759,22 @@ dataImportRouter.post("/teachers", uploadCsv, (req: AuthedRequest, res) => {
     );
     const updateLink = db.prepare(
         `UPDATE teacher_class_links
-         SET subject_name = ?,
-             is_head_teacher = ?
+         SET subject_name = ?, is_head_teacher = ?
          WHERE id = ?`
     );
 
     const runImport = db.transaction((items: Array<{ line: number; data: TeacherImportRow }>) => {
         for (const item of items) {
             const row = item.data;
-            const teacher = findTeacher.get(row.teacherUsername, ROLES.TEACHER, ROLES.HEAD_TEACHER, ROLES.ADMIN) as
-                | { id: number; role: string }
-                | undefined;
-
-            if (!teacher) {
-                summary.errors.push({ line: item.line, field: "teacherUsername", reason: `教师账号 ${row.teacherUsername} 不存在` });
-                continue;
-            }
-
+            const teacherUserId = syncTeacherAccount(row, summary);
             const subjectName = row.subjectName ?? (row.isHeadTeacher === 1 ? "班主任" : "学科待完善");
-            const existing = findLink.get(teacher.id, row.className) as { id: number } | undefined;
+            const existing = findLink.get(teacherUserId, row.className) as { id: number } | undefined;
+
             if (existing) {
                 updateLink.run(subjectName, row.isHeadTeacher, existing.id);
                 summary.updated += 1;
             } else {
-                insertLink.run(teacher.id, row.className, subjectName, row.isHeadTeacher, dayjs().toISOString());
+                insertLink.run(teacherUserId, row.className, subjectName, row.isHeadTeacher, dayjs().toISOString());
                 summary.imported += 1;
             }
         }
@@ -570,7 +789,7 @@ dataImportRouter.post("/teachers", uploadCsv, (req: AuthedRequest, res) => {
             actionModule: "data-import",
             actionType: "import_teachers",
             objectType: "teacher_class_links",
-            detail: { source: req.file ? "csv" : "json", ...summary },
+            detail: { source, ...summary, issuanceCount: summary.issuanceRecords.length },
             ipAddress: extractIp(req)
         });
     }

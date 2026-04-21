@@ -1,9 +1,10 @@
 import { FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 import { useAuth } from "../App";
+import { SiteFooter } from "../components/SiteFooter";
 
 export const LoginPage = () => {
   const navigate = useNavigate();
@@ -40,7 +41,7 @@ export const LoginPage = () => {
     <div className="auth-page">
       <div className="auth-card">
         <h1>登录系统</h1>
-        <p>使用邀请码创建的账号或演示账号登录。</p>
+        <p>请使用学校或管理员分配的账号登录。</p>
 
         <form onSubmit={onSubmit} className="form-stack">
           <label>
@@ -80,11 +81,8 @@ export const LoginPage = () => {
             {loading ? "登录中..." : "登录"}
           </button>
         </form>
-
-        <p className="inline-tip">
-          没有账号？<Link to="/register">邀请码注册</Link>
-        </p>
       </div>
+      <SiteFooter className="auth-footer" />
     </div>
   );
 };

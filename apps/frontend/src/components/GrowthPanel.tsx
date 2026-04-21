@@ -81,6 +81,7 @@ export const GrowthPanel = ({ user }: { user: User }) => {
                 setProfile(profileResp.data);
                 setTrends(trendResp.data);
                 setAlerts(alertResp.data);
+                setError("");
             } catch (err) {
                 setError(err instanceof Error ? err.message : "加载成长数据失败");
             }
@@ -160,10 +161,10 @@ export const GrowthPanel = ({ user }: { user: User }) => {
 
             <article className="panel-card">
                 <h4>成长画像</h4>
-                <p>{profile?.profile.summary}</p>
+                <p>{profile?.profile?.summary || "暂无成长画像，请先完成数据导入或等待系统生成。"}</p>
                 <p>风险等级: {riskLabel}</p>
-                <p>兴趣: {profile?.student.interests || "--"}</p>
-                <p>目标: {profile?.student.careerGoal || "--"}</p>
+                <p>兴趣: {profile?.student?.interests || "--"}</p>
+                <p>目标: {profile?.student?.careerGoal || "--"}</p>
             </article>
 
             <article className="panel-card">
@@ -176,6 +177,7 @@ export const GrowthPanel = ({ user }: { user: User }) => {
                             <small>{new Date(item.createdAt).toLocaleDateString()}</small>
                         </div>
                     ))}
+                    {alerts.length === 0 ? <p className="muted-text">暂无预警记录。</p> : null}
                 </div>
             </article>
 
@@ -191,6 +193,7 @@ export const GrowthPanel = ({ user }: { user: User }) => {
                         </LineChart>
                     </ResponsiveContainer>
                 </div>
+                {trends.length === 0 ? <p className="muted-text">暂无考试趋势数据。</p> : null}
             </article>
 
             {aiSummary ? (

@@ -7,6 +7,7 @@ export type AuthUser = {
   displayName: string;
   role: Role;
   linkedStudentId: number | null;
+  mustChangePassword: boolean;
 };
 
 export type AuthedRequest = Request & {

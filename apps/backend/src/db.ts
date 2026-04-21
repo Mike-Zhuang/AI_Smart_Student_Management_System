@@ -34,8 +34,11 @@ const createSchema = (): void => {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL,
       linked_student_id INTEGER,
-            phone TEXT,
-            email TEXT,
+      phone TEXT,
+      email TEXT,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
+      password_reset_at TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
 
@@ -238,21 +241,48 @@ const createSchema = (): void => {
   `);
 };
 
-const createUser = (username: string, displayName: string, role: string, password: string, linkedStudentId: number | null = null): number => {
+const createUser = (
+    username: string,
+    displayName: string,
+    role: string,
+    password: string,
+    linkedStudentId: number | null = null,
+    mustChangePassword = false
+): number => {
     const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username) as { id: number } | undefined;
     if (existing) {
         return existing.id;
     }
 
     const result = db.prepare(
-        `INSERT INTO users (username, display_name, password_hash, role, linked_student_id, created_at)
-   VALUES (@username, @displayName, @passwordHash, @role, @linkedStudentId, @createdAt)`
+        `INSERT INTO users (
+            username,
+            display_name,
+            password_hash,
+            role,
+            linked_student_id,
+            must_change_password,
+            password_reset_at,
+            created_at
+        )
+        VALUES (
+            @username,
+            @displayName,
+            @passwordHash,
+            @role,
+            @linkedStudentId,
+            @mustChangePassword,
+            @passwordResetAt,
+            @createdAt
+        )`
     ).run({
         username,
         displayName,
         passwordHash: hashPassword(password),
         role,
         linkedStudentId,
+        mustChangePassword: mustChangePassword ? 1 : 0,
+        passwordResetAt: mustChangePassword ? dayjs().toISOString() : null,
         createdAt: dayjs().toISOString()
     });
 
@@ -665,6 +695,15 @@ export const initDatabase = (): void => {
     }
     if (!userColumns.some((item) => item.name === "email")) {
         db.exec(`ALTER TABLE users ADD COLUMN email TEXT`);
+    }
+    if (!userColumns.some((item) => item.name === "must_change_password")) {
+        db.exec(`ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!userColumns.some((item) => item.name === "password_reset_at")) {
+        db.exec(`ALTER TABLE users ADD COLUMN password_reset_at TEXT`);
+    }
+    if (!userColumns.some((item) => item.name === "is_active")) {
+        db.exec(`ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1`);
     }
 
     const studentColumns = db.prepare(`PRAGMA table_info(students)`).all() as Array<{ name: string }>;

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
+import { SiteFooter } from "./SiteFooter";
 
 const NAV_ITEMS = [
     { key: "overview", label: "总览", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
@@ -12,7 +13,7 @@ const NAV_ITEMS = [
     { key: "teaching", label: "教研管理", roles: ["admin", "teacher", "head_teacher"] },
     { key: "ai-lab", label: "AI助手中心", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "account", label: "我的账号", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
-    { key: "data-import", label: "数据导入", roles: ["admin", "head_teacher"] }
+    { key: "data-import", label: "数据导入", roles: ["admin", "teacher", "head_teacher"] }
 ];
 
 export const AppShell = ({
@@ -80,20 +81,23 @@ export const AppShell = ({
             />
 
             <main className="app-main">
-                <header className="top-header">
-                    <button
-                        type="button"
-                        className="mobile-nav-toggle"
-                        onClick={() => setMobileNavOpen((prev) => !prev)}
-                    >
-                        {mobileNavOpen ? "关闭菜单" : "打开菜单"}
-                    </button>
-                    <div>
-                        <h2>{user.displayName}</h2>
-                        <p>欢迎回来，请按模块完成管理与评比演示</p>
-                    </div>
-                </header>
-                {children}
+                <div className="app-main-content">
+                    <header className="top-header">
+                        <button
+                            type="button"
+                            className="mobile-nav-toggle"
+                            onClick={() => setMobileNavOpen((prev) => !prev)}
+                        >
+                            {mobileNavOpen ? "关闭菜单" : "打开菜单"}
+                        </button>
+                        <div>
+                            <h2>{user.displayName}</h2>
+                            <p>欢迎回来，请按模块完成管理与评比演示</p>
+                        </div>
+                    </header>
+                    {children}
+                </div>
+                <SiteFooter />
             </main>
         </div>
     );

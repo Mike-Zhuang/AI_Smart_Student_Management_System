@@ -3,7 +3,6 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import type { User } from "./lib/types";
 import { storage } from "./lib/storage";
 import { LoginPage } from "./pages/LoginPage";
-import { RegisterPage } from "./pages/RegisterPage";
 import { DashboardPage } from "./pages/DashboardPage";
 
 type AuthContextValue = {
@@ -40,7 +39,6 @@ function App() {
     <AuthProvider value={value}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
         <Route
           path="/dashboard/:section?"
           element={user ? <DashboardPage /> : <Navigate to="/login" replace />}

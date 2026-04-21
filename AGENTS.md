@@ -317,3 +317,24 @@
   - `apps/frontend/src/components/GrowthPanel.tsx` 取消学生列表 `slice(0, 60)` 截断，改为展示完整列表并按 `id` 倒序。
 - 验证结果：
   - 执行 `npm run build -w @ms/frontend` 通过。
+
+## 2026-04-21 21:28:45 +0800
+
+- 完成内部合规化与站点挂载改造：
+  - 前端移除公开注册入口，登录页改为“学校分配账号登录”口径。
+  - 后端关闭 `POST /api/auth/register` 公开注册能力。
+  - 新增站点备案号底部挂载、`robots.txt`、`noindex,nofollow` 元标签与独立 `favicon.svg`。
+- 完成账号发放体系升级：
+  - 学生导入自动创建/同步学生账号，默认账号支持使用学号或模板指定登录账号。
+  - 教师导入自动创建/同步教师账号，不再依赖“教师账号必须事先存在”。
+  - 用户表新增首次改密、最近重置时间、启用状态字段。
+  - 新增账号台账接口与重置密码接口，前端“我的账号”页新增账号发放台账与密码重置入口。
+- 完成导入稳定性修复：
+  - `apps/backend/src/routes/dataImport.ts` 重构为 Excel/CSV 通用导入，支持 UTF-8、GBK/GB18030 CSV 与 XLSX。
+  - 导入返回新增账号发放统计与一次性账号发放单数据。
+  - 模板升级为同时提供 `.csv` 与 `.xlsx`，并补齐学生/教师账号相关列。
+- 完成页面稳定性修复：
+  - `apps/backend/src/routes/growth.ts` 与 `apps/frontend/src/components/GrowthPanel.tsx` 为成长画像空态补齐兜底，避免白屏。
+  - `apps/frontend/src/styles.css` 调整工具区栅格与按钮占位，修复生涯页中等宽度下选择框重叠问题。
+- 文档同步更新：
+  - 更新 `README.md`、`GUIDE.md`、`docs/evaluation-checklist.md`、`docs/defense-demo-script.md`，统一为“后台发号 + Excel/CSV 导入 + 备案/反爬已配置”的口径。

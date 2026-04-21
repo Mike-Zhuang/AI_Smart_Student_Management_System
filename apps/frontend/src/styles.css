@@ -58,8 +58,10 @@ table {
 .auth-page {
     min-height: 100vh;
     display: grid;
+    align-content: center;
     place-items: center;
     padding: 24px;
+    gap: 20px;
 }
 
 .auth-card {
@@ -245,10 +247,16 @@ textarea:focus {
 
 .app-main {
     padding: 28px;
-    display: grid;
-    gap: 18px;
+    display: flex;
+    flex-direction: column;
     height: 100vh;
     overflow: auto;
+}
+
+.app-main-content {
+    display: grid;
+    gap: 18px;
+    flex: 1;
 }
 
 .top-header {
@@ -327,13 +335,21 @@ textarea:focus {
 
 .inline-form {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 10px;
     align-items: end;
 }
 
 .section-actions {
     margin-top: 12px;
+}
+
+.section-actions .primary-btn,
+.section-actions .secondary-btn,
+.inline-form .primary-btn,
+.inline-form .secondary-btn {
+    width: 100%;
+    min-width: 0;
 }
 
 .file-upload-row {
@@ -707,6 +723,52 @@ td {
     background: linear-gradient(180deg, rgba(201, 100, 66, 0.05), rgba(250, 249, 245, 0.95));
 }
 
+.site-footer {
+    width: 100%;
+    text-align: center;
+    padding: 18px 8px 6px;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.site-footer a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.site-footer a:hover {
+    color: var(--brand);
+    border-color: rgba(201, 100, 66, 0.35);
+}
+
+.auth-footer {
+    padding-top: 0;
+}
+
+.warning-box {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(201, 100, 66, 0.28);
+    background: rgba(201, 100, 66, 0.08);
+    color: #6a3c2d;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.account-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.account-issuance-list {
+    display: grid;
+    gap: 10px;
+}
+
 @keyframes fadeIn {
     from {
         opacity: 0;
@@ -768,6 +830,10 @@ td {
         padding: 18px;
     }
 
+    .app-main-content {
+        flex: initial;
+    }
+
     .top-header {
         position: static;
     }
@@ -777,6 +843,10 @@ td {
     }
 
     .ai-chat-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .inline-form {
         grid-template-columns: 1fr;
     }
 

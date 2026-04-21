@@ -1,4 +1,4 @@
-teacherUsername,className,isHeadTeacher,subjectName
-teacher_zhang,高一(1)班,0,数学
-teacher_zhang,高一(2)班,0,数学
-head_li,高一(1)班,1,班主任
+teacherUsername,displayName,className,isHeadTeacher,subjectName
+teacher_zhang,张老师,高一(1)班,0,数学
+teacher_zhang,张老师,高一(2)班,0,数学
+head_li,李班主任,高一(1)班,1,班主任
