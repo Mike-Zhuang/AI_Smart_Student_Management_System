@@ -67,6 +67,11 @@ type CareerStreamCompletePayload = StreamCompletePayload & {
     };
 };
 
+const looksLikeStructuredJson = (value: string): boolean => {
+    const trimmed = value.trim();
+    return trimmed.startsWith("{") || trimmed.startsWith("[");
+};
+
 export const CareerPanel = ({ user }: { user: User }) => {
     const navigate = useNavigate();
     const [students, setStudents] = useState<Student[]>([]);
@@ -239,7 +244,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
                 supplementalContext
             });
             setStreamStatus("finalizing");
-            if (typeof complete.answer === "string" && complete.answer.trim()) {
+            if (typeof complete.answer === "string" && complete.answer.trim() && !looksLikeStructuredJson(complete.answer)) {
                 setStreamingAnswer(complete.answer.trim());
             } else if (complete.result.reasoning && !streamingAnswer.trim()) {
                 setStreamingAnswer(complete.result.reasoning);

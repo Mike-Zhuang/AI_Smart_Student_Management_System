@@ -10,7 +10,7 @@ import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 import { parseStructuredJson } from "../utils/structuredOutput.js";
 import { getAllAllowedCombinations, isValidCombination, validateSelectionByStage } from "../utils/subjectRules.js";
-import { normalizeExamName, repairText } from "../utils/text.js";
+import { normalizeExamName, repairText, sanitizeModelInputText } from "../utils/text.js";
 
 const generateSchema = z.object({
     studentId: z.number().int().positive(),
@@ -97,6 +97,37 @@ const loadStudentContext = (studentId: number) => {
     return { student, scoreRows };
 };
 
+const toFriendlyRecommendationText = (result: {
+    selectedCombination: string;
+    reasoning: string;
+    majorSuggestions: string[];
+    scoreBreakdown: {
+        science: number;
+        social: number;
+        logic: number;
+        language: number;
+        stability: number;
+        confidence?: number;
+        counterfactual?: string;
+    };
+}): string => {
+    const suggestions = result.majorSuggestions.slice(0, 3).join("、") || "暂无";
+    return [
+        `推荐组合：${result.selectedCombination}`,
+        `综合判断：${result.reasoning}`,
+        `重点维度：逻辑 ${result.scoreBreakdown.logic} / 科学 ${result.scoreBreakdown.science} / 稳定性 ${result.scoreBreakdown.stability}`,
+        `专业方向：${suggestions}`,
+        `置信度：${result.scoreBreakdown.confidence ?? "--"}`
+    ].join("\n");
+};
+
+const splitTextForStreaming = (value: string): string[] => {
+    return value
+        .split(/(?<=[。；！\n])/)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+};
+
 const buildStudentData = (
     student: NonNullable<ReturnType<typeof loadStudentContext>>["student"],
     scoreRows: NonNullable<ReturnType<typeof loadStudentContext>>["scoreRows"],
@@ -113,7 +144,7 @@ const buildStudentData = (
         }, new Map<string, Array<{ subject: string; examName: string; examDate: string; avgScore: number }>>())
     )
         .slice(-5)
-        .map(([, rows]) => `${normalizeExamName(rows[0]?.examName) || rows[0]?.examName}：${rows.map((row) => `${row.subject}${Number(row.avgScore).toFixed(1)}`).join("，")}`)
+        .map(([, rows]) => `${normalizeExamName(rows[0]?.examName) || sanitizeModelInputText(rows[0]?.examName ?? "", "考试")}：${rows.map((row) => `${sanitizeModelInputText(row.subject, "学科")}${Number(row.avgScore).toFixed(1)}`).join("，")}`)
         .join("\n");
 
     const averageBySubject = new Map<string, number>();
@@ -128,23 +159,23 @@ const buildStudentData = (
         .map((subject) => {
             const total = averageBySubject.get(subject) ?? 0;
             const count = averageBySubject.get(`${subject}_count`) ?? 0;
-            return `${subject}: ${count > 0 ? (total / count).toFixed(1) : "暂无"}`;
+            return `${sanitizeModelInputText(subject, "学科")}: ${count > 0 ? (total / count).toFixed(1) : "暂无"}`;
         })
         .join("\n");
 
     return [
-        `姓名: ${student.name}`,
-        `年级班级: ${student.grade} ${student.className}`,
-        `当前学段: ${student.academicStage ?? "未知"}`,
-        `当前选科状态: ${student.selectionStatus ?? "待完善"}`,
-        `当前选科组合: ${student.subjectCombination ?? "暂无"}`,
-        `兴趣方向: ${student.interests ?? "暂无"}`,
-        `生涯目标: ${student.careerGoal ?? "暂无"}`,
+        `姓名: ${sanitizeModelInputText(student.name, "暂无有效姓名")}`,
+        `年级班级: ${sanitizeModelInputText(student.grade, "未知年级")} ${sanitizeModelInputText(student.className, "未知班级")}`,
+        `当前学段: ${sanitizeModelInputText(student.academicStage ?? "", "未知")}`,
+        `当前选科状态: ${sanitizeModelInputText(student.selectionStatus ?? "", "待完善")}`,
+        `当前选科组合: ${sanitizeModelInputText(student.subjectCombination ?? "", "暂无")}`,
+        `兴趣方向: ${sanitizeModelInputText(student.interests ?? "", "暂无有效兴趣信息")}`,
+        `生涯目标: ${sanitizeModelInputText(student.careerGoal ?? "", "暂无有效目标信息")}`,
         "历次考试摘要:",
-        latestFiveExams || "暂无成绩",
+        sanitizeModelInputText(latestFiveExams, "暂无有效成绩摘要"),
         "学科平均分:",
-        subjectAverages,
-        `自由补充信息: ${repairText(supplementalContext ?? "") || "暂无"}`
+        sanitizeModelInputText(subjectAverages, "暂无有效学科均分信息"),
+        `自由补充信息: ${sanitizeModelInputText(supplementalContext ?? "", "暂无有效补充信息")}`
     ].join("\n");
 };
 
@@ -297,7 +328,8 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req: AuthedRe
             prompt,
             systemPrompt: template.systemPrompt,
             responseFormat: template.outputFormat,
-            enableThinking: modelMeta.thinking
+            enableThinking: modelMeta.thinking,
+            maxOutputTokens: 12288
         });
 
         const parsedAnswer = parseJsonAnswer(result.content);
@@ -381,12 +413,22 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
 
     let answer = "";
     let reasoning = "";
+    let stageHintsSent = 0;
     let clientClosed = false;
     res.on("close", () => {
         clientClosed = true;
     });
 
+    const emitHint = (hint: string): void => {
+        if (clientClosed || res.writableEnded) {
+            return;
+        }
+        sendSse(res, "delta", { delta: hint });
+    };
+
     try {
+        emitHint("正在分析学生成绩、兴趣方向与生涯目标…\n");
+        stageHintsSent = 1;
         const result = await streamZhipu(
             {
                 apiKey: input.apiKey,
@@ -394,7 +436,8 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
                 prompt,
                 systemPrompt: template.systemPrompt,
                 responseFormat: template.outputFormat,
-                enableThinking: modelMeta.thinking
+                enableThinking: modelMeta.thinking,
+                maxOutputTokens: 12288
             },
             {
                 onTextDelta: (delta) => {
@@ -402,7 +445,10 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
                         return;
                     }
                     answer += delta;
-                    sendSse(res, "delta", { delta });
+                    if (stageHintsSent < 2 && delta.trim().length > 0) {
+                        emitHint("正在匹配选科组合并整理证据链…\n");
+                        stageHintsSent = 2;
+                    }
                 },
                 onReasoningDelta: (delta) => {
                     if (clientClosed || res.writableEnded) {
@@ -410,6 +456,10 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
                     }
                     reasoning += delta;
                     sendSse(res, "reasoning-delta", { delta });
+                    if (stageHintsSent < 2 && reasoning.length > 30) {
+                        emitHint("正在结合成绩趋势、兴趣方向和家校补充信息综合判断…\n");
+                        stageHintsSent = 2;
+                    }
                 },
                 onUsage: (usage) => {
                     if (clientClosed || res.writableEnded) {
@@ -422,10 +472,21 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
 
         answer = result.content;
         reasoning = result.reasoning ?? reasoning;
+        if (stageHintsSent < 3) {
+            emitHint("正在校验结构化结果并整理最终建议…\n");
+            stageHintsSent = 3;
+        }
 
         const parsedAnswer = parseJsonAnswer(answer);
         if (!parsedAnswer.parsed) {
-            sendSse(res, "error", { message: parsedAnswer.error ?? "模型返回格式异常，请重试（需返回合法 JSON）" });
+            const finishReasonType = result.finishReason === "length" ? "TRUNCATED_OUTPUT" : parsedAnswer.errorType ?? "INVALID_JSON";
+            const errorMessage =
+                finishReasonType === "TRUNCATED_OUTPUT"
+                    ? "模型输出被截断，未能整理成完整选科建议，请重试或切换更稳定模型。"
+                    : finishReasonType === "EMPTY_FINAL_CONTENT"
+                        ? "模型没有返回最终正文，请重试。"
+                        : "模型返回了不完整的结构化内容，请重试。";
+            sendSse(res, "error", { type: finishReasonType, message: errorMessage });
             return;
         }
 
@@ -459,7 +520,7 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
         });
 
         sendSse(res, "complete", {
-            answer,
+            answer: toFriendlyRecommendationText(persisted),
             reasoning,
             studentId: input.studentId,
             model: modelMeta.id,

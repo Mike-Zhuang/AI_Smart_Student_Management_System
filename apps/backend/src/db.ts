@@ -27,6 +27,14 @@ export const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 
 const TEXT_REPAIR_VERSION = "2026-04-22-encoding-v2";
+const shouldSeedDemoData = (): boolean => {
+    const explicit = process.env.ENABLE_DEMO_SEED === "true";
+    if (explicit) {
+        return true;
+    }
+
+    return process.env.NODE_ENV !== "production";
+};
 
 const createSchema = (): void => {
     db.exec(`
@@ -1047,7 +1055,9 @@ export const initDatabase = (): void => {
     }
 
     seedPublicData();
-    seedDemoData();
+    if (shouldSeedDemoData()) {
+        seedDemoData();
+    }
 
     db.prepare(
         `UPDATE exam_results

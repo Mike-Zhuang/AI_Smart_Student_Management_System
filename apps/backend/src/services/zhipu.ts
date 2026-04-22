@@ -25,6 +25,7 @@ export type ChatPayload = {
         content: string;
     }>;
     allowThinkingRetry?: boolean;
+    maxOutputTokens?: number;
 };
 
 export type ChatResult = {
@@ -212,6 +213,22 @@ const getRequestTimeoutMs = (payload: ChatPayload): number => {
     return 60000;
 };
 
+const getMaxOutputTokens = (payload: ChatPayload): number => {
+    if (payload.maxOutputTokens && payload.maxOutputTokens > 0) {
+        return payload.maxOutputTokens;
+    }
+
+    if (payload.responseFormat === "json_object") {
+        return payload.enableThinking ? 12288 : 8192;
+    }
+
+    if (payload.enableThinking) {
+        return 6144;
+    }
+
+    return 4096;
+};
+
 const buildMessages = (payload: ChatPayload): Array<{
     role: "system" | "user" | "assistant";
     content: string | MultiModalItem[];
@@ -243,7 +260,7 @@ const toRequestBody = (payload: ChatPayload, stream: boolean) => {
         messages: buildMessages(payload),
         thinking: payload.enableThinking ? { type: "enabled" } : undefined,
         response_format: payload.responseFormat === "json_object" ? { type: "json_object" } : undefined,
-        max_tokens: 2048,
+        max_tokens: getMaxOutputTokens(payload),
         temperature: 0.7,
         stream
     };

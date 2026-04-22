@@ -1,6 +1,11 @@
 const fencedJsonPattern = /```json\s*([\s\S]*?)```/i;
 const fencedCodePattern = /```\s*([\s\S]*?)```/i;
 
+export type StructuredOutputErrorType =
+    | "TRUNCATED_OUTPUT"
+    | "INVALID_JSON"
+    | "EMPTY_FINAL_CONTENT";
+
 const tryParse = (value: string): Record<string, unknown> | null => {
     try {
         const parsed = JSON.parse(value) as unknown;
@@ -77,13 +82,68 @@ const normalizeCommonJsonIssues = (value: string): string => {
         .trim();
 };
 
+const isLikelyTruncatedJson = (value: string): boolean => {
+    const normalized = normalizeCommonJsonIssues(value);
+    if (!normalized || !normalized.includes("{")) {
+        return false;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaping = false;
+
+    for (const current of normalized) {
+        if (inString) {
+            if (escaping) {
+                escaping = false;
+                continue;
+            }
+            if (current === "\\") {
+                escaping = true;
+                continue;
+            }
+            if (current === "\"") {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (current === "\"") {
+            inString = true;
+            continue;
+        }
+
+        if (current === "{") {
+            depth += 1;
+            continue;
+        }
+
+        if (current === "}") {
+            depth -= 1;
+        }
+    }
+
+    return depth > 0 || /[:,"\[]\s*$/.test(normalized);
+};
+
 export const parseStructuredJson = (raw: string): {
     parsed: Record<string, unknown> | null;
     source: string;
     repaired: boolean;
+    errorType?: StructuredOutputErrorType;
     error?: string;
 } => {
     const trimmed = raw.trim();
+    if (!trimmed) {
+        return {
+            parsed: null,
+            source: "",
+            repaired: false,
+            errorType: "EMPTY_FINAL_CONTENT",
+            error: "模型未返回最终正文"
+        };
+    }
+
     const candidates = [
         trimmed,
         trimmed.match(fencedJsonPattern)?.[1]?.trim(),
@@ -108,6 +168,7 @@ export const parseStructuredJson = (raw: string): {
         parsed: null,
         source: trimmed,
         repaired: false,
-        error: "模型返回内容未能解析为合法 JSON"
+        errorType: isLikelyTruncatedJson(trimmed) ? "TRUNCATED_OUTPUT" : "INVALID_JSON",
+        error: isLikelyTruncatedJson(trimmed) ? "模型输出被截断，未返回完整 JSON" : "模型返回内容未能解析为合法 JSON"
     };
 };

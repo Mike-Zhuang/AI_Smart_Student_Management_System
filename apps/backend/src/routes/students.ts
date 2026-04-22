@@ -6,6 +6,7 @@ import { canAccessStudent, requireAuth } from "../middleware/auth.js";
 import type { AuthedRequest } from "../types.js";
 import { deleteUserWithIssuance } from "../utils/accountMaintenance.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { repairRecordStrings } from "../utils/text.js";
 import {
     ACADEMIC_STAGE_OPTIONS,
     FIRST_SUBJECT_OPTIONS,
@@ -161,7 +162,11 @@ studentsRouter.get("/", requireAuth, (req: AuthedRequest, res) => {
             .all(req.user.linkedStudentId ?? -1);
     }
 
-    res.json({ success: true, message: "查询成功", data: rows });
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: (rows as Array<Record<string, unknown>>).map((item) => repairRecordStrings(item))
+    });
 });
 
 studentsRouter.patch("/:id/subject-selection", requireAuth, (req: AuthedRequest, res) => {

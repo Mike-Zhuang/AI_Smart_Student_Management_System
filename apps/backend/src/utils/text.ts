@@ -4,7 +4,10 @@ const MOJIBAKE_PATTERNS = [
     /�/,
     /锟/,
     /瀛|鏂|鎷|閿|鍐|璇|鏉|甯|骞|妯/,
+    /鐢|鏈|瑕|濂|涔|犲|夭|鍚|鍙/,
     /Ã|Â|ð|Ð|¢/,
+    /ç”|æœ|å¥|å­|ä¹|å¤|å|ä¸/,
+    /ó|Ô|Ã|Ñ|ï|ì|é|ò/,
     /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/,
     /å|æ|ç|è|é/
 ];
@@ -81,6 +84,14 @@ const normalizeDisplayText = (value: string): string => {
         .trim();
 };
 
+const getChineseRatio = (value: string): number => {
+    if (!value) {
+        return 0;
+    }
+    const chinese = (value.match(/[\u4e00-\u9fa5]/g) ?? []).length;
+    return chinese / value.length;
+};
+
 const decodeWithEncodingFallback = (buffer: Buffer, encodings: string[]): string[] => {
     return encodings
         .map((encoding) => {
@@ -117,6 +128,34 @@ const tryReDecode = (value: string): string[] => {
     ];
 };
 
+const isLikelyUnreadable = (value: string): boolean => {
+    const normalized = normalizeDisplayText(value);
+    if (!normalized) {
+        return true;
+    }
+
+    const score = scoreCandidate(normalized);
+    const chineseRatio = getChineseRatio(normalized);
+    const hasCommonMojibake = needsRepair(normalized);
+    const obviousUnreadablePattern =
+        /锟斤拷|瀛﹂敓|鐢辨湀|ç”±|óéÔÂ|C"2AX/i.test(normalized) ||
+        (/[ÃÂåæçéó]/.test(normalized) && chineseRatio < 0.15);
+
+    if (obviousUnreadablePattern) {
+        return true;
+    }
+
+    if (hasCommonMojibake && score < 6) {
+        return true;
+    }
+
+    if (!/[\u4e00-\u9fa5]/.test(normalized) && /[ÃÂåæçéó锟瀛鏂鎷]/.test(normalized)) {
+        return true;
+    }
+
+    return false;
+};
+
 export const decodeTextBuffer = (buffer: Buffer): string => {
     const candidates = [
         buffer.toString("utf8"),
@@ -142,6 +181,22 @@ export const repairText = (value: unknown): string => {
     const candidates = [normalized, ...tryReDecode(normalized).map(normalizeDisplayText)].filter(Boolean);
     return candidates.sort((left, right) => scoreCandidate(right) - scoreCandidate(left))[0] ?? normalized;
 };
+
+export const sanitizeModelInputText = (value: unknown, fallback = "暂无有效信息"): string => {
+    const repaired = repairText(value);
+    if (!repaired) {
+        return fallback;
+    }
+
+    if (isLikelyUnreadable(repaired)) {
+        return fallback;
+    }
+
+    return repaired;
+};
+
+export const MOJIBAKE_SYSTEM_HINT =
+    "若输入中仍残留少量乱码，请仅按常见编码误读规律做谨慎理解：例如 GBK 误读 UTF-8 常见为“鐢辨湀/瀛﹂敓”，UTF-8 误读 GBK 常见为“锟斤拷”，ISO8859-1 误读可能出现“ç”±/óéÔÂ”等。只有在语义高度确定时才可尝试恢复；若无法确定，必须明确视为无效信息，禁止自行编造。";
 
 export const repairRecordStrings = <T extends Record<string, unknown>>(record: T): T => {
     const next = { ...record };

@@ -7,7 +7,7 @@ import { requireAuth, canAccessStudent } from "../middleware/auth.js";
 import { callZhipu, streamZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
-import { normalizeExamName, repairText } from "../utils/text.js";
+import { normalizeExamName, repairText, sanitizeModelInputText } from "../utils/text.js";
 
 export const growthRouter = Router();
 
@@ -222,12 +222,12 @@ growthRouter.post("/students/:studentId/ai-diagnosis", requireAuth, async (req: 
         .all(studentId) as Array<{ alertType: string; content: string; status: string }>;
 
     const studentData = [
-        `姓名: ${student.name}`,
-        `班级: ${student.grade} ${student.className}`,
-        `兴趣: ${student.interests ?? "暂无"}`,
-        `目标: ${student.careerGoal ?? "暂无"}`,
-        `趋势: ${trends.map((item) => `${item.examName}:${item.avgScore}`).join("; ") || "暂无"}`,
-        `预警: ${alerts.map((item) => `${item.alertType}-${item.content}-${item.status}`).join("; ") || "暂无"}`
+        `姓名: ${sanitizeModelInputText(student.name, "暂无有效姓名")}`,
+        `班级: ${sanitizeModelInputText(student.grade, "未知年级")} ${sanitizeModelInputText(student.className, "未知班级")}`,
+        `兴趣: ${sanitizeModelInputText(student.interests ?? "", "暂无有效兴趣信息")}`,
+        `目标: ${sanitizeModelInputText(student.careerGoal ?? "", "暂无有效目标信息")}`,
+        `趋势: ${sanitizeModelInputText(trends.map((item) => `${normalizeExamName(item.examName) || sanitizeModelInputText(item.examName, "考试")} : ${item.avgScore}`).join("; "), "暂无有效趋势信息")}`,
+        `预警: ${sanitizeModelInputText(alerts.map((item) => `${sanitizeModelInputText(item.alertType, "预警")}-${sanitizeModelInputText(item.content, "内容待确认")}-${sanitizeModelInputText(item.status, "状态待确认")}`).join("; "), "暂无有效预警信息")}`
     ].join("\n");
 
     const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
@@ -350,12 +350,12 @@ growthRouter.post("/students/:studentId/ai-diagnosis-stream", requireAuth, async
         .all(studentId) as Array<{ alertType: string; content: string; status: string }>;
 
     const studentData = [
-        `姓名: ${student.name}`,
-        `班级: ${student.grade} ${student.className}`,
-        `兴趣: ${student.interests ?? "暂无"}`,
-        `目标: ${student.careerGoal ?? "暂无"}`,
-        `趋势: ${trends.map((item) => `${item.examName}:${item.avgScore}`).join("; ") || "暂无"}`,
-        `预警: ${alerts.map((item) => `${item.alertType}-${item.content}-${item.status}`).join("; ") || "暂无"}`
+        `姓名: ${sanitizeModelInputText(student.name, "暂无有效姓名")}`,
+        `班级: ${sanitizeModelInputText(student.grade, "未知年级")} ${sanitizeModelInputText(student.className, "未知班级")}`,
+        `兴趣: ${sanitizeModelInputText(student.interests ?? "", "暂无有效兴趣信息")}`,
+        `目标: ${sanitizeModelInputText(student.careerGoal ?? "", "暂无有效目标信息")}`,
+        `趋势: ${sanitizeModelInputText(trends.map((item) => `${normalizeExamName(item.examName) || sanitizeModelInputText(item.examName, "考试")} : ${item.avgScore}`).join("; "), "暂无有效趋势信息")}`,
+        `预警: ${sanitizeModelInputText(alerts.map((item) => `${sanitizeModelInputText(item.alertType, "预警")}-${sanitizeModelInputText(item.content, "内容待确认")}-${sanitizeModelInputText(item.status, "状态待确认")}`).join("; "), "暂无有效预警信息")}`
     ].join("\n");
 
     const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;

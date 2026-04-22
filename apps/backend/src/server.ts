@@ -54,5 +54,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 app.listen(port, host, () => {
   // eslint-disable-next-line no-console
   console.log(`Backend running at http://${host}:${port}`);
+  // eslint-disable-next-line no-console
+  console.log(`Demo seed enabled: ${process.env.ENABLE_DEMO_SEED === "true" || process.env.NODE_ENV !== "production" ? "yes" : "no"}`);
   runDeferredDatabaseMaintenance();
 });

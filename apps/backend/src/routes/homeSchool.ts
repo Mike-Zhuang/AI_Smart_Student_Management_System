@@ -8,7 +8,7 @@ import { canAccessStudent, requireAuth, requireRole } from "../middleware/auth.j
 import { callZhipu, streamZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
-import { normalizeClassName, repairText } from "../utils/text.js";
+import { normalizeClassName, repairText, sanitizeModelInputText } from "../utils/text.js";
 
 const createMessageSchema = z.object({
     receiverUserId: z.number().int().positive().optional(),
@@ -656,7 +656,7 @@ homeSchoolRouter.post("/messages/:id/ai-reply-draft", requireAuth, requireRole(R
     }
 
     const prompt = `${fillTemplate(template.template, {
-        parentMessage: `标题: ${message.title}\n内容: ${message.content}\n发送人: ${message.senderName ?? "家长"}`
+        parentMessage: `标题: ${sanitizeModelInputText(message.title, "暂无有效标题")}\n内容: ${sanitizeModelInputText(message.content, "暂无有效内容")}\n发送人: ${sanitizeModelInputText(message.senderName ?? "家长", "家长")}`
     })}\n\n输出规范:\n${template.outputSpec}`;
 
     try {
@@ -706,7 +706,7 @@ homeSchoolRouter.post("/messages/:id/ai-reply-draft-stream", requireAuth, requir
     }
 
     const prompt = `${fillTemplate(template.template, {
-        parentMessage: `标题: ${message.title}\n内容: ${message.content}\n发送人: ${message.senderName ?? "家长"}`
+        parentMessage: `标题: ${sanitizeModelInputText(message.title, "暂无有效标题")}\n内容: ${sanitizeModelInputText(message.content, "暂无有效内容")}\n发送人: ${sanitizeModelInputText(message.senderName ?? "家长", "家长")}`
     })}\n\n输出规范:\n${template.outputSpec}`;
 
     initSse(res);

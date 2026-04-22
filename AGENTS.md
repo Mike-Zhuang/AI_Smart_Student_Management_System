@@ -360,6 +360,23 @@
 - 验证结果：
   - 公网 `POST /api/auth/login` 使用 `admin / admin123` 已返回登录成功。
 
+## 2026-04-22 20:57:26 +0800
+
+- 完成生产数据隔离与 AI 结构化流式修复：
+  - `apps/backend/src/db.ts` 新增生产环境演示种子硬禁逻辑，仅在显式 `ENABLE_DEMO_SEED=true` 或非生产环境下允许 `seedDemoData()` 执行。
+  - `apps/backend/src/server.ts` 启动日志增加 demo seed 状态输出，便于区分开发环境与生产环境数据策略。
+  - `apps/backend/src/services/zhipu.ts` 为所有适用的结构化/长输出模型统一提升 `max_tokens` 策略，不再只针对个别模型单独放宽输出上限。
+- 修复选科 AI 暴露 JSON 与流式中断体验：
+  - `apps/backend/src/routes/career.ts` 重构选科流式协议，流式阶段改为输出面向老师的友好正文提示，不再直接透传原始 JSON 片段。
+  - `apps/backend/src/utils/structuredOutput.ts` 增加结构化错误分类，能区分 `TRUNCATED_OUTPUT`、`INVALID_JSON`、`EMPTY_FINAL_CONTENT`。
+  - `apps/frontend/src/components/CareerPanel.tsx` 增加 JSON 外观拦截，完成后优先展示中文结果卡片内容，不再把结构化原文显示给用户。
+- 补齐进入模型前的隐式乱码治理：
+  - `apps/backend/src/utils/text.ts` 扩展乱码模式识别，并新增 `sanitizeModelInputText` 与内部 `MOJIBAKE_SYSTEM_HINT`，用于模型输入净化和提示词兜底。
+  - `apps/backend/src/routes/career.ts`、`apps/backend/src/routes/growth.ts`、`apps/backend/src/routes/homeSchool.ts` 在构造模型输入时统一修复姓名、班级、兴趣、目标、考试名称、学科名与补充信息；若仍疑似乱码，降级为“暂无有效信息”而不再把脏文本直接送给模型。
+  - `apps/backend/src/routes/students.ts` 学生列表接口补齐 `repairRecordStrings`，降低前端与 AI 输入继续读取脏文本的概率。
+- 文档同步：
+  - 更新 `README.md` 与 `GUIDE.md`，补充“同步脚本不覆盖线上数据库、生产环境禁 demo seed、选科流式不再显示 JSON、AI 思考链乱码治理”的说明。
+
 ## 2026-04-22 19:57:12 +0800
 
 - 全局 AI 流式调用链路重构：
