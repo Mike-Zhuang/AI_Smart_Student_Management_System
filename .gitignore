@@ -32,3 +32,7 @@ apps/backend/uploads/
 # Logs
 logs/
 *.log
+
+# Competition package
+submit/
+submit.zip

@@ -318,34 +318,11 @@
 - 验证结果：
   - 执行 `npm run build -w @ms/frontend` 通过。
 
-## 2026-04-21 21:28:45 +0800
+## 2026-04-22 09:56:28 +0800
 
-- 完成内部合规化与站点挂载改造：
-  - 前端移除公开注册入口，登录页改为“学校分配账号登录”口径。
-  - 后端关闭 `POST /api/auth/register` 公开注册能力。
-  - 新增站点备案号底部挂载、`robots.txt`、`noindex,nofollow` 元标签与独立 `favicon.svg`。
-- 完成账号发放体系升级：
-  - 学生导入自动创建/同步学生账号，默认账号支持使用学号或模板指定登录账号。
-  - 教师导入自动创建/同步教师账号，不再依赖“教师账号必须事先存在”。
-  - 用户表新增首次改密、最近重置时间、启用状态字段。
-  - 新增账号台账接口与重置密码接口，前端“我的账号”页新增账号发放台账与密码重置入口。
-- 完成导入稳定性修复：
-  - `apps/backend/src/routes/dataImport.ts` 重构为 Excel/CSV 通用导入，支持 UTF-8、GBK/GB18030 CSV 与 XLSX。
-  - 导入返回新增账号发放统计与一次性账号发放单数据。
-  - 模板升级为同时提供 `.csv` 与 `.xlsx`，并补齐学生/教师账号相关列。
-- 完成页面稳定性修复：
-  - `apps/backend/src/routes/growth.ts` 与 `apps/frontend/src/components/GrowthPanel.tsx` 为成长画像空态补齐兜底，避免白屏。
-  - `apps/frontend/src/styles.css` 调整工具区栅格与按钮占位，修复生涯页中等宽度下选择框重叠问题。
-- 文档同步更新：
-  - 更新 `README.md`、`GUIDE.md`、`docs/evaluation-checklist.md`、`docs/defense-demo-script.md`，统一为“后台发号 + Excel/CSV 导入 + 备案/反爬已配置”的口径。
-
-## 2026-04-21 21:57:14 +0800
-
-- 进一步优化账号发放与数据清理体验：
-  - `apps/frontend/src/components/DataImportPanel.tsx` 将账号发放单升级为自动生成并下载 Excel（`.xlsx`）版本，不再仅导出 CSV。
-  - 导入页补充“密码不长期明文保存”的安全提示，并指向“我的账号”中的重置密码能力。
-  - 导入页新增学生数据清理区，支持按学号/姓名搜索并删除误导入、乱码或测试学生。
-- 后端新增学生删除能力：
-  - `apps/backend/src/routes/students.ts` 新增删除接口，删除学生时会一并清理该学生的成绩、行为、画像、预警、请假、选课建议、家长关联与学生账号，并写入审计日志。
-- 工程依赖更新：
-  - `apps/frontend/package.json` 新增 `xlsx`，用于浏览器端生成 Excel 发放单。
+- 竞赛提交打包准备：
+  - 新建 `submit/` 目录并按现有仓库结构复制项目文件，保留前后端源码、部署脚本与说明文档（`README.md`、`GUIDE.md`、`DESIGN.md`、`docs/`、`official_doc/`）。
+  - 打包副本中排除非必要提交内容：`.git/`、`AGENTS.md`、`node_modules/`、各类构建产物目录（`dist/build/coverage/.vite`）、本地环境文件（`.env*`）与后端运行时数据库/上传目录。
+  - 更新根 `.gitignore`，新增 `submit/` 忽略规则，避免提交过程将打包副本再次纳入版本管理。
+- 验证结果：
+  - 已检查 `submit/` 中关键文档完整存在且 `AGENTS.md`、`node_modules/` 不存在。
