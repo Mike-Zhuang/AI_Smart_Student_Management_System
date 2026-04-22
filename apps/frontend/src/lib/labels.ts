@@ -41,6 +41,23 @@ export const parentConfirmStatusLabelMap: Record<string, string> = {
     returned: "已退回"
 };
 
+export const commonStatusLabelMap: Record<string, string> = {
+    pending: "待处理",
+    approved: "已批准",
+    rejected: "已驳回",
+    completed: "已完成",
+    confirmed: "已确认",
+    returned: "已退回",
+    cancelled: "已取消",
+    todo: "待处理",
+    in_progress: "进行中",
+    done: "已完成",
+    free: "免费",
+    paid: "收费",
+    text: "文本",
+    image: "图片"
+};
+
 export const taskStatusLabelMap: Record<string, string> = {
     todo: "待处理",
     in_progress: "进行中",
@@ -56,5 +73,5 @@ export const roleHomeMessageMap: Record<User["role"], string> = {
 };
 
 export const mapLabel = (value: string, dictionary: Record<string, string>): string => {
-    return dictionary[value] ?? value;
+    return dictionary[value] ?? commonStatusLabelMap[value] ?? "未知状态";
 };

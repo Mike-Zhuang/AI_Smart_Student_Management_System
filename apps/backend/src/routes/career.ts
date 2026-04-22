@@ -8,6 +8,7 @@ import { canAccessStudent, requireAuth } from "../middleware/auth.js";
 import { callZhipu, streamZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { parseStructuredJson } from "../utils/structuredOutput.js";
 import { getAllAllowedCombinations, isValidCombination, validateSelectionByStage } from "../utils/subjectRules.js";
 import { normalizeExamName, repairText } from "../utils/text.js";
 
@@ -22,16 +23,30 @@ const combinations = getAllAllowedCombinations();
 
 export const careerRouter = Router();
 
-const parseJsonAnswer = (answer: string): Record<string, unknown> | null => {
-    const trimmed = answer.trim();
-    const fenced = trimmed.match(/```json\s*([\s\S]*?)```/i) || trimmed.match(/```\s*([\s\S]*?)```/i);
-    const source = fenced ? fenced[1].trim() : trimmed;
+const parseJsonAnswer = (answer: string) => parseStructuredJson(answer);
 
-    try {
-        return JSON.parse(source) as Record<string, unknown>;
-    } catch {
-        return null;
+const normalizeRecommendationPayload = (raw: Record<string, unknown>): Record<string, unknown> => {
+    const normalized = { ...raw };
+
+    if (typeof normalized.summary !== "string" && typeof normalized.reasoning === "string") {
+        normalized.summary = normalized.reasoning;
     }
+
+    if (!Array.isArray(normalized.majorSuggestions) && typeof normalized.majorSuggestions === "string") {
+        normalized.majorSuggestions = String(normalized.majorSuggestions)
+            .split(/[、,，；;]+/)
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+    }
+
+    if (typeof normalized.confidence === "string") {
+        const parsed = Number(normalized.confidence);
+        if (!Number.isNaN(parsed)) {
+            normalized.confidence = parsed;
+        }
+    }
+
+    return normalized;
 };
 
 const loadStudentContext = (studentId: number) => {
@@ -286,8 +301,8 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req: AuthedRe
         });
 
         const parsedAnswer = parseJsonAnswer(result.content);
-        if (!parsedAnswer) {
-            res.status(502).json({ success: false, message: "模型返回格式异常，请重试（需返回合法 JSON）" });
+        if (!parsedAnswer.parsed) {
+            res.status(502).json({ success: false, message: parsedAnswer.error ?? "模型返回格式异常，请重试（需返回合法 JSON）" });
             return;
         }
 
@@ -302,7 +317,7 @@ careerRouter.post("/recommendations/generate", requireAuth, async (req: AuthedRe
         const persisted = persistRecommendation(
             input.studentId,
             modelMeta.id,
-            parsedAnswer,
+            normalizeRecommendationPayload(parsedAnswer.parsed),
             validated.ok ? validated.subjectCombination : context.student.subjectCombination
         );
 
@@ -395,6 +410,12 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
                     }
                     reasoning += delta;
                     sendSse(res, "reasoning-delta", { delta });
+                },
+                onUsage: (usage) => {
+                    if (clientClosed || res.writableEnded) {
+                        return;
+                    }
+                    sendSse(res, "usage", usage);
                 }
             }
         );
@@ -403,8 +424,8 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
         reasoning = result.reasoning ?? reasoning;
 
         const parsedAnswer = parseJsonAnswer(answer);
-        if (!parsedAnswer) {
-            sendSse(res, "error", { message: "模型返回格式异常，请重试（需返回合法 JSON）" });
+        if (!parsedAnswer.parsed) {
+            sendSse(res, "error", { message: parsedAnswer.error ?? "模型返回格式异常，请重试（需返回合法 JSON）" });
             return;
         }
 
@@ -419,7 +440,7 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
         const persisted = persistRecommendation(
             input.studentId,
             modelMeta.id,
-            parsedAnswer,
+            normalizeRecommendationPayload(parsedAnswer.parsed),
             validated.ok ? validated.subjectCombination : context.student.subjectCombination
         );
 
@@ -442,7 +463,9 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
             reasoning,
             studentId: input.studentId,
             model: modelMeta.id,
-            result: persisted
+            result: persisted,
+            usage: result.usage,
+            finishReason: result.finishReason
         });
     } catch (error) {
         const reason = error instanceof Error ? error.message : "未知错误";

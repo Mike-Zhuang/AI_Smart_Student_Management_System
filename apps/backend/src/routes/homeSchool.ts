@@ -1,11 +1,11 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import dayjs from "dayjs";
 import { z } from "zod";
 import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
 import { getSupportedModelById, ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { canAccessStudent, requireAuth, requireRole } from "../middleware/auth.js";
-import { callZhipu } from "../services/zhipu.js";
+import { callZhipu, streamZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 import { normalizeClassName, repairText } from "../utils/text.js";
@@ -51,6 +51,24 @@ const aiReplySchema = z.object({
 });
 
 export const homeSchoolRouter = Router();
+
+const initSse = (res: Response): void => {
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    if (typeof res.flushHeaders === "function") {
+        res.flushHeaders();
+    }
+};
+
+const sendSse = (res: Response, event: string, payload: unknown): void => {
+    if (res.writableEnded) {
+        return;
+    }
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+};
 
 const getManageableClasses = (userId: number): string[] => {
     return (db
@@ -110,23 +128,29 @@ const getLeaveById = (leaveId: number) => {
 };
 
 const buildLeaveTimeline = (leave: NonNullable<ReturnType<typeof getLeaveById>>) => {
+    const isParentInitiated = leave.requesterRole === ROLES.PARENT;
     return [
         {
             step: "学生提交",
             status: "done",
-            note: leave.requesterRole === ROLES.STUDENT ? "学生已提交请假申请" : "家长代为提交申请",
+            note: leave.requesterRole === ROLES.STUDENT
+                ? "学生已提交请假申请"
+                : leave.requesterRole === ROLES.PARENT
+                    ? "家长代为提交申请"
+                    : "老师已代为登记请假申请",
             time: leave.createdAt
         },
         {
             step: "家长确认",
-            status:
-                leave.parentConfirmStatus === "confirmed"
+            status: isParentInitiated
+                ? "done"
+                : leave.parentConfirmStatus === "confirmed"
                     ? "done"
                     : leave.parentConfirmStatus === "returned"
                         ? "returned"
                         : "pending",
-            note: leave.parentConfirmNote,
-            time: leave.parentConfirmedAt
+            note: isParentInitiated ? "家长已代提交，直接进入班主任审批" : leave.parentConfirmNote,
+            time: isParentInitiated ? leave.createdAt : leave.parentConfirmedAt
         },
         {
             step: "班主任审批",
@@ -649,5 +673,76 @@ homeSchoolRouter.post("/messages/:id/ai-reply-draft", requireAuth, requireRole(R
     } catch (error) {
         const reason = error instanceof Error ? error.message : "未知错误";
         res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });
+    }
+});
+
+homeSchoolRouter.post("/messages/:id/ai-reply-draft-stream", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), async (req: AuthedRequest, res) => {
+    const messageId = Number(req.params.id);
+    const parsed = aiReplySchema.safeParse(req.body);
+    if (Number.isNaN(messageId) || !parsed.success || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const message = db
+        .prepare(
+            `SELECT m.id, m.title, m.content, sender.display_name as senderName
+             FROM messages m
+             LEFT JOIN users sender ON sender.id = m.sender_user_id
+             WHERE m.id = ?`
+        )
+        .get(messageId) as { id: number; title: string; content: string; senderName: string | null } | undefined;
+
+    if (!message) {
+        res.status(404).json({ success: false, message: "消息不存在" });
+        return;
+    }
+
+    const template = getTemplateById("home-school-reply-v1");
+    const modelMeta = getSupportedModelById(parsed.data.model);
+    if (!template || !modelMeta || !modelMeta.supportsStreaming) {
+        res.status(400).json({ success: false, message: "模板或模型不可用" });
+        return;
+    }
+
+    const prompt = `${fillTemplate(template.template, {
+        parentMessage: `标题: ${message.title}\n内容: ${message.content}\n发送人: ${message.senderName ?? "家长"}`
+    })}\n\n输出规范:\n${template.outputSpec}`;
+
+    initSse(res);
+    sendSse(res, "conversation", { messageId, model: parsed.data.model });
+
+    try {
+        const result = await streamZhipu(
+            {
+                apiKey: parsed.data.apiKey,
+                model: parsed.data.model,
+                prompt,
+                systemPrompt: template.systemPrompt,
+                responseFormat: template.outputFormat,
+                enableThinking: modelMeta.thinking
+            },
+            {
+                onTextDelta: (delta) => sendSse(res, "delta", { delta }),
+                onReasoningDelta: (delta) => sendSse(res, "reasoning-delta", { delta }),
+                onUsage: (usage) => sendSse(res, "usage", usage)
+            }
+        );
+
+        sendSse(res, "complete", {
+            messageId,
+            draft: result.content,
+            reasoning: result.reasoning,
+            model: parsed.data.model,
+            usage: result.usage,
+            finishReason: result.finishReason
+        });
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : "未知错误";
+        sendSse(res, "error", { message: `模型调用失败: ${reason}` });
+    } finally {
+        if (!res.writableEnded) {
+            res.end();
+        }
     }
 });

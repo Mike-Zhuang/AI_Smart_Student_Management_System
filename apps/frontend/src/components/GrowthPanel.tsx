@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiRequest } from "../lib/api";
+import type { SupportedModel } from "../lib/ai";
 import { riskLevelLabelMap } from "../lib/labels";
+import { consumeSseStream } from "../lib/sse";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
@@ -47,15 +49,26 @@ export const GrowthPanel = ({ user }: { user: User }) => {
     const [trends, setTrends] = useState<Trend[]>([]);
     const [alerts, setAlerts] = useState<Alert[]>([]);
     const [apiKey, setApiKey] = useState(storage.getApiKey());
+    const [models, setModels] = useState<SupportedModel[]>([]);
+    const [model, setModel] = useState("glm-4.7-flash");
     const [aiSummary, setAiSummary] = useState("");
+    const [aiReasoning, setAiReasoning] = useState("");
+    const [loadingAi, setLoadingAi] = useState(false);
     const [error, setError] = useState("");
 
     useEffect(() => {
         const loadStudents = async () => {
             try {
-                const response = await apiRequest<Student[]>("/api/students");
+                const [studentResp, modelResp] = await Promise.all([
+                    apiRequest<Student[]>("/api/students"),
+                    apiRequest<SupportedModel[]>("/api/ai/models")
+                ]);
+                const response = studentResp;
                 const ordered = [...response.data].sort((a, b) => b.id - a.id);
                 setStudents(ordered);
+                const structuredModels = modelResp.data.filter((item) => item.supportsStreaming && item.supportsJsonMode);
+                setModels(structuredModels);
+                setModel(structuredModels.find((item) => item.isDefault)?.id ?? structuredModels[0]?.id ?? "glm-4.7-flash");
                 if (!studentId && ordered.length > 0) {
                     setStudentId(ordered[0].id);
                 }
@@ -134,22 +147,47 @@ export const GrowthPanel = ({ user }: { user: User }) => {
                             }
 
                             try {
+                                setLoadingAi(true);
+                                setAiSummary("");
+                                setAiReasoning("");
                                 storage.setApiKey(apiKey.trim());
-                                const response = await apiRequest<{ answer: string }>(`/api/growth/students/${studentId}/ai-diagnosis`, {
-                                    method: "POST",
-                                    body: JSON.stringify({ apiKey: apiKey.trim(), model: "glm-4.7-flash" })
-                                });
-                                setAiSummary(response.data.answer);
+                                const response = await consumeSseStream(
+                                    `/api/growth/students/${studentId}/ai-diagnosis-stream`,
+                                    {
+                                        method: "POST",
+                                        body: JSON.stringify({ apiKey: apiKey.trim(), model }),
+                                        headers: { "Content-Type": "application/json" }
+                                    },
+                                    {
+                                        onTextDelta: (delta) => setAiSummary((prev) => prev + delta),
+                                        onReasoningDelta: (delta) => setAiReasoning((prev) => prev + delta)
+                                    }
+                                );
+                                if (typeof response.answer === "string" && response.answer.trim()) {
+                                    setAiSummary(response.answer);
+                                }
                             } catch (err) {
                                 setError(err instanceof Error ? err.message : "AI诊断失败");
+                            } finally {
+                                setLoadingAi(false);
                             }
                         }}
                     >
-                        AI风险诊断
+                        {loadingAi ? "诊断中..." : "AI风险诊断"}
                     </button>
                     <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=growth")}>
                         进入AI聊天
                     </button>
+                    <label>
+                        模型
+                        <select value={model} onChange={(event) => setModel(event.target.value)}>
+                            {models.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                    {item.name} / {item.pricingTier === "paid" ? "收费" : "免费"}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
                 </div>
             </article>
 
@@ -192,10 +230,16 @@ export const GrowthPanel = ({ user }: { user: User }) => {
                 )}
             </article>
 
-            {aiSummary ? (
+            {(aiSummary || loadingAi) ? (
                 <article className="panel-card wide">
-                    <h4>AI 诊断结果</h4>
-                    <pre className="answer-box">{aiSummary}</pre>
+                    <h4>AI 诊断结果（流式）</h4>
+                    <pre className="answer-box">{aiSummary || "模型正在逐步分析近期学情..."}</pre>
+                    {aiReasoning ? (
+                        <details className="reasoning-box" open={loadingAi}>
+                            <summary>思考过程</summary>
+                            <pre>{aiReasoning}</pre>
+                        </details>
+                    ) : null}
                 </article>
             ) : null}
 

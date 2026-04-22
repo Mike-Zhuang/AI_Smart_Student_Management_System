@@ -548,7 +548,7 @@ export const AccountPanel = () => {
                         </div>
                         <div className="role-item">
                             <span>选科状态</span>
-                            <strong>{selectionStatusLabelMap[data.roleProfile.student.selectionStatus] ?? data.roleProfile.student.selectionStatus}</strong>
+                            <strong>{selectionStatusLabelMap[data.roleProfile.student.selectionStatus] ?? "待完善"}</strong>
                         </div>
                     </div>
                     <p>当前组合：{data.roleProfile.student.subjectCombination ?? "暂无"}</p>

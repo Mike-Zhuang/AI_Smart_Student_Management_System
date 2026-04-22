@@ -30,12 +30,21 @@ export type ChatPayload = {
 export type ChatResult = {
     content: string;
     reasoning?: string;
+    usage?: {
+        promptTokens?: number;
+        completionTokens?: number;
+        totalTokens?: number;
+        cachedTokens?: number;
+    };
+    finishReason?: string | null;
     retryUsed?: boolean;
 };
 
 export type ZhipuStreamHandlers = {
     onTextDelta?: (delta: string) => void;
     onReasoningDelta?: (delta: string) => void;
+    onUsage?: (usage: NonNullable<ChatResult["usage"]>) => void;
+    onFinish?: (finishReason: string | null) => void;
 };
 
 export class ZhipuCallError extends Error {
@@ -282,6 +291,26 @@ const mergeReasoningWithRetry = (firstReasoning: string, retryReasoning?: string
         .join("\n");
 };
 
+const normalizeUsage = (usage: unknown): ChatResult["usage"] | undefined => {
+    if (!usage || typeof usage !== "object") {
+        return undefined;
+    }
+
+    const typed = usage as {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+    };
+
+    return {
+        promptTokens: typed.prompt_tokens,
+        completionTokens: typed.completion_tokens,
+        totalTokens: typed.total_tokens,
+        cachedTokens: typed.prompt_tokens_details?.cached_tokens
+    };
+};
+
 export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
     try {
         const response = await axios.post(
@@ -318,6 +347,8 @@ export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
                     return {
                         content: retryResult.content,
                         reasoning: mergeReasoningWithRetry(reasoning, retryResult.reasoning),
+                        usage: retryResult.usage,
+                        finishReason: retryResult.finishReason,
                         retryUsed: true
                     };
                 } catch {
@@ -327,13 +358,17 @@ export const callZhipu = async (payload: ChatPayload): Promise<ChatResult> => {
 
             return {
                 content: REASONING_ONLY_HINT,
-                reasoning
+                reasoning,
+                usage: normalizeUsage(response.data?.usage),
+                finishReason: response.data?.choices?.[0]?.finish_reason ?? null
             };
         }
 
         return {
             content,
-            reasoning: reasoning || undefined
+            reasoning: reasoning || undefined,
+            usage: normalizeUsage(response.data?.usage),
+            finishReason: response.data?.choices?.[0]?.finish_reason ?? null
         };
     } catch (error) {
         if (error instanceof ZhipuCallError) {
@@ -359,6 +394,8 @@ export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHan
         let content = "";
         let reasoning = "";
         let buffer = "";
+        let usage: ChatResult["usage"];
+        let finishReason: string | null = null;
 
         const parseBuffer = (): void => {
             const matcher = /\r?\n\r?\n/;
@@ -392,7 +429,9 @@ export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHan
                                         reasoning?: unknown;
                                         thinking?: unknown;
                                     };
+                                    finish_reason?: string | null;
                                 }>;
+                                usage?: unknown;
                             };
 
                             const choice = parsed.choices?.[0];
@@ -410,6 +449,17 @@ export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHan
                                     reasoning += reasoningDelta;
                                     handlers.onReasoningDelta?.(reasoningDelta);
                                 }
+                            }
+
+                            if (choice?.finish_reason !== undefined) {
+                                finishReason = choice.finish_reason ?? null;
+                                handlers.onFinish?.(finishReason);
+                            }
+
+                            const normalizedUsage = normalizeUsage(parsed.usage);
+                            if (normalizedUsage) {
+                                usage = normalizedUsage;
+                                handlers.onUsage?.(normalizedUsage);
                             }
                         } catch {
                             // 忽略非JSON事件块
@@ -448,6 +498,8 @@ export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHan
                     return {
                         content: retryResult.content,
                         reasoning: mergeReasoningWithRetry(normalizedReasoning, retryResult.reasoning),
+                        usage: retryResult.usage,
+                        finishReason: retryResult.finishReason,
                         retryUsed: true
                     };
                 } catch {
@@ -458,13 +510,17 @@ export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHan
             handlers.onTextDelta?.(REASONING_ONLY_HINT);
             return {
                 content: REASONING_ONLY_HINT,
-                reasoning: normalizedReasoning
+                reasoning: normalizedReasoning,
+                usage,
+                finishReason
             };
         }
 
         return {
             content: normalizedContent,
-            reasoning: normalizedReasoning || undefined
+            reasoning: normalizedReasoning || undefined,
+            usage,
+            finishReason
         };
     } catch (error) {
         if (error instanceof ZhipuCallError) {

@@ -104,7 +104,7 @@ export const OverviewPanel = ({ user }: { user: User }) => {
                     <div className="role-grid">
                         {overview.users.map((item) => (
                             <div key={item.role} className="role-item">
-                                <span>{roleLabelMap[item.role as User["role"]] ?? item.role}</span>
+                                <span>{roleLabelMap[item.role as User["role"]] ?? "未知角色"}</span>
                                 <strong>{item.count}</strong>
                             </div>
                         ))}

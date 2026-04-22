@@ -172,10 +172,10 @@ const cleanCell = (value: unknown): string => {
 const normalizeRecord = (record: SheetRecord): SheetRecord => {
     const normalized: SheetRecord = {};
     for (const [rawKey, rawValue] of Object.entries(record)) {
-        const key = cleanCell(rawKey);
-        normalized[key] = typeof rawValue === "string" ? cleanCell(rawValue) : rawValue;
+        const key = repairText(cleanCell(rawKey));
+        normalized[key] = typeof rawValue === "string" ? repairText(cleanCell(rawValue)) : rawValue;
     }
-    return normalized;
+    return repairRecordStrings(normalized);
 };
 
 const decodeCsvBuffer = (buffer: Buffer): string => {
@@ -209,7 +209,7 @@ const parseXlsxRows = (buffer: Buffer): SheetRecord[] => {
         defval: "",
         raw: false
     });
-    return rows.map(normalizeRecord);
+    return rows.map((row) => normalizeRecord(repairRecordStrings(row)));
 };
 
 const tryParseJsonRows = (value: unknown): SheetRecord[] | null => {
@@ -897,7 +897,7 @@ dataImportRouter.post("/teachers", uploadSheet, (req: AuthedRequest, res) => {
 });
 
 dataImportRouter.get("/exam-results/manage", (req: AuthedRequest, res) => {
-    const examName = typeof req.query.examName === "string" ? repairText(req.query.examName) : "";
+    const examName = typeof req.query.examName === "string" ? (normalizeExamName(req.query.examName) || repairText(req.query.examName)) : "";
     const examDate = typeof req.query.examDate === "string" ? req.query.examDate : "";
 
     let rows = db

@@ -13,6 +13,7 @@ import {
 import { comparePassword, generateTemporaryPassword, hashPassword, signToken } from "../utils/auth.js";
 import type { AuthUser, AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { repairRecordStrings, repairText } from "../utils/text.js";
 
 const loginSchema = z.object({
     username: z.string().min(3),
@@ -508,7 +509,7 @@ authRouter.patch("/me/password", requireAuth, (req: AuthedRequest, res) => {
 });
 
 authRouter.get("/accounts", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (_req, res) => {
-    const rows = db
+    const rows = (db
         .prepare(
             `SELECT u.id, u.username, u.display_name as displayName, u.role,
                     u.linked_student_id as linkedStudentId,
@@ -573,10 +574,12 @@ authRouter.get("/accounts", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER,
                     ) as canDownloadPassword
              FROM users u
              LEFT JOIN students s ON s.id = u.linked_student_id
+             WHERE u.username != '__system_audit__'
              ORDER BY u.created_at DESC
              LIMIT 400`
         )
-        .all();
+        .all() as Array<Record<string, unknown>>)
+        .map((item) => repairRecordStrings(item));
 
     res.json({ success: true, message: "查询成功", data: rows });
 });
@@ -754,7 +757,7 @@ authRouter.post("/parent-accounts/batch-generate", requireAuth, requireRole(ROLE
 });
 
 authRouter.get("/account-issuance-batches", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (_req, res) => {
-    const rows = db
+    const rows = (db
         .prepare(
             `SELECT b.id, b.batch_type as batchType, b.source_module as sourceModule, b.title, b.note, b.created_at as createdAt,
                     u.display_name as operatorName,
@@ -769,7 +772,8 @@ authRouter.get("/account-issuance-batches", requireAuth, requireRole(ROLES.ADMIN
              ORDER BY b.created_at DESC, b.id DESC
              LIMIT 200`
         )
-        .all();
+        .all() as Array<Record<string, unknown>>)
+        .map((item) => repairRecordStrings(item));
 
     res.json({ success: true, message: "查询成功", data: rows });
 });
@@ -781,7 +785,7 @@ authRouter.get("/account-issuance-batches/:batchId", requireAuth, requireRole(RO
         return;
     }
 
-    const batch = db
+    const rawBatch = db
         .prepare(
             `SELECT b.id, b.batch_type as batchType, b.source_module as sourceModule, b.title, b.note, b.created_at as createdAt,
                     u.display_name as operatorName,
@@ -795,14 +799,15 @@ authRouter.get("/account-issuance-batches/:batchId", requireAuth, requireRole(RO
              LEFT JOIN users u ON u.id = b.operator_user_id
              WHERE b.id = ?`
         )
-        .get(batchId);
+        .get(batchId) as Record<string, unknown> | undefined;
+    const batch = rawBatch ? repairRecordStrings(rawBatch) : undefined;
 
     if (!batch) {
         res.status(404).json({ success: false, message: "账号发放批次不存在" });
         return;
     }
 
-    const items = db
+    const items = (db
         .prepare(
             `SELECT id, user_id as userId, username, display_name as displayName, role,
                     related_name as relatedName, student_no as studentNo, class_name as className,
@@ -813,7 +818,8 @@ authRouter.get("/account-issuance-batches/:batchId", requireAuth, requireRole(RO
              WHERE batch_id = ?
              ORDER BY id ASC`
         )
-        .all(batchId);
+        .all(batchId) as Array<Record<string, unknown>>)
+        .map((item) => repairRecordStrings(item));
 
     res.json({ success: true, message: "查询成功", data: { batch, items } });
 });

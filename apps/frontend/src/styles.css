@@ -619,6 +619,7 @@ td {
 
 .chat-stream {
     display: grid;
+    align-content: start;
     gap: 10px;
     min-height: 460px;
     max-height: 460px;
@@ -732,6 +733,16 @@ td {
 
 .chat-followup-form .primary-btn {
     min-width: 112px;
+}
+
+.compact-followup {
+    align-self: end;
+    margin-top: auto;
+}
+
+.chat-followup-form.compact-followup textarea {
+    min-height: 96px;
+    max-height: 180px;
 }
 
 .panel-card.subtle {

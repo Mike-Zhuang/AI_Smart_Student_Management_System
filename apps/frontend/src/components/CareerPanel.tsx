@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiRequest, resolveApiUrl } from "../lib/api";
+import { apiRequest } from "../lib/api";
+import { type StreamCompletePayload, type SupportedModel } from "../lib/ai";
 import { downloadExport } from "../lib/export";
 import { selectionStatusLabelMap } from "../lib/labels";
+import { consumeSseStream } from "../lib/sse";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
@@ -56,18 +58,7 @@ type SubjectRules = {
     };
 };
 
-type ModelItem = {
-    id: string;
-    name: string;
-    description: string;
-    multimodal: boolean;
-    thinking: boolean;
-    supportsJsonMode: boolean;
-    pricingTier: "free" | "paid";
-    isDefault: boolean;
-};
-
-type StreamCompletePayload = {
+type CareerStreamCompletePayload = StreamCompletePayload & {
     result: {
         selectedCombination: string;
         reasoning: string;
@@ -82,7 +73,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
     const [studentId, setStudentId] = useState<number | null>(null);
     const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
     const [majors, setMajors] = useState<MajorRow[]>([]);
-    const [models, setModels] = useState<ModelItem[]>([]);
+    const [models, setModels] = useState<SupportedModel[]>([]);
     const [model, setModel] = useState("glm-4.7-flash");
     const [apiKey, setApiKey] = useState(storage.getApiKey());
     const [error, setError] = useState("");
@@ -90,6 +81,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
     const [selectionSaving, setSelectionSaving] = useState(false);
     const [rules, setRules] = useState<SubjectRules | null>(null);
     const [streamingAnswer, setStreamingAnswer] = useState("");
+    const [streamingReasoning, setStreamingReasoning] = useState("");
     const [supplementalContext, setSupplementalContext] = useState("");
     const [streamStatus, setStreamStatus] = useState<"idle" | "connecting" | "streaming" | "finalizing">("idle");
     const [selectionForm, setSelectionForm] = useState({
@@ -136,13 +128,13 @@ export const CareerPanel = ({ user }: { user: User }) => {
                     apiRequest<Student[]>("/api/students"),
                     apiRequest<MajorRow[]>("/api/career/public-data/major-requirements"),
                     apiRequest<SubjectRules>("/api/students/subject-rules"),
-                    apiRequest<ModelItem[]>("/api/ai/models")
+                    apiRequest<SupportedModel[]>("/api/ai/models")
                 ]);
                 const ordered = [...studentResp.data].sort((a, b) => b.id - a.id);
                 setStudents(ordered);
                 setMajors(majorResp.data);
                 setRules(ruleResp.data);
-                const textModels = modelResp.data.filter((item) => item.supportsJsonMode);
+                const textModels = modelResp.data.filter((item) => item.supportsStreaming && item.supportsJsonMode);
                 setModels(textModels);
                 setModel(textModels.find((item) => item.isDefault)?.id ?? textModels[0]?.id ?? "glm-4.7-flash");
                 if (ordered.length > 0) {
@@ -199,95 +191,30 @@ export const CareerPanel = ({ user }: { user: User }) => {
         }
     };
 
-    const consumeStream = async (payload: unknown): Promise<StreamCompletePayload> => {
-        const token = storage.getToken();
-        const response = await fetch(resolveApiUrl("/api/career/recommendations/generate-stream"), {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(token ? { Authorization: `Bearer ${token}` } : {})
-            },
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok || !response.body) {
-            const raw = await response.text();
-            throw new Error(raw || "流式生成失败");
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let complete: StreamCompletePayload | null = null;
-        let fallbackResult: StreamCompletePayload | null = null;
-        let sawAnyDelta = false;
-
-        const processBlock = (block: string): void => {
-            const lines = block.split(/\r?\n/).filter(Boolean);
-            const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() ?? "message";
-            const dataLines = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim());
-            if (dataLines.length === 0) {
-                return;
-            }
-
-            const parsed = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
-            if (event === "delta" && typeof parsed.delta === "string") {
-                sawAnyDelta = true;
-                setStreamStatus("streaming");
-                setStreamingAnswer((prev) => prev + parsed.delta);
-                return;
-            }
-            if (event === "error") {
-                throw new Error(String(parsed.message ?? "生成失败"));
-            }
-            if (event === "complete") {
-                complete = parsed as unknown as StreamCompletePayload;
-                fallbackResult = complete;
-                if (typeof parsed.answer === "string" && parsed.answer.trim()) {
-                    setStreamingAnswer(parsed.answer.trim());
+    const consumeStream = async (payload: unknown): Promise<CareerStreamCompletePayload> => {
+        return consumeSseStream(
+            "/api/career/recommendations/generate-stream",
+            {
+                method: "POST",
+                body: JSON.stringify(payload),
+                headers: {
+                    "Content-Type": "application/json"
                 }
-                return;
+            },
+            {
+                onConversation: () => {
+                    setStreamStatus("connecting");
+                },
+                onTextDelta: (delta) => {
+                    setStreamStatus("streaming");
+                    setStreamingAnswer((prev) => prev + delta);
+                },
+                onReasoningDelta: (delta) => {
+                    setStreamStatus("streaming");
+                    setStreamingReasoning((prev) => prev + delta);
+                }
             }
-            if (event === "conversation" && !sawAnyDelta) {
-                setStreamStatus("connecting");
-            }
-            if (parsed.result && typeof parsed.result === "object") {
-                fallbackResult = parsed as unknown as StreamCompletePayload;
-            }
-        };
-
-        const flushBuffer = (): void => {
-            const matcher = /\r?\n\r?\n/;
-            let matched = buffer.match(matcher);
-            while (matched && matched.index !== undefined) {
-                const block = buffer.slice(0, matched.index);
-                buffer = buffer.slice(matched.index + matched[0].length);
-                processBlock(block);
-                matched = buffer.match(matcher);
-            }
-        };
-
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) {
-                break;
-            }
-            buffer += decoder.decode(value, { stream: true });
-            flushBuffer();
-        }
-        buffer += decoder.decode();
-        if (buffer.trim()) {
-            processBlock(buffer.trim());
-        }
-        if (complete) {
-            return complete;
-        }
-        const resolvedFallback = fallbackResult;
-        if (resolvedFallback) {
-            setError("技术告警：未收到明确完成事件，系统已按最终结果完成落库。");
-            return resolvedFallback;
-        }
-        throw new Error("未收到选科建议完成事件");
+        ) as Promise<CareerStreamCompletePayload>;
     };
 
     const generate = async () => {
@@ -300,6 +227,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
         }
         setLoading(true);
         setStreamingAnswer("");
+        setStreamingReasoning("");
         setError("");
         setStreamStatus("connecting");
         try {
@@ -311,7 +239,9 @@ export const CareerPanel = ({ user }: { user: User }) => {
                 supplementalContext
             });
             setStreamStatus("finalizing");
-            if (complete.result.reasoning && !streamingAnswer.trim()) {
+            if (typeof complete.answer === "string" && complete.answer.trim()) {
+                setStreamingAnswer(complete.answer.trim());
+            } else if (complete.result.reasoning && !streamingAnswer.trim()) {
                 setStreamingAnswer(complete.result.reasoning);
             }
             await loadRecommendations(studentId);
@@ -343,7 +273,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
                                 <select value={model} onChange={(event) => setModel(event.target.value)}>
                                     {models.map((item) => (
                                         <option key={item.id} value={item.id}>
-                                            {item.name} / {item.pricingTier === "paid" ? "收费" : "免费"}
+                                            {item.name} / {item.pricingTier === "paid" ? "收费" : "免费"} / {item.supportsThinking ? "支持思考" : "直出"}
                                         </option>
                                     ))}
                                 </select>
@@ -431,7 +361,16 @@ export const CareerPanel = ({ user }: { user: User }) => {
                     <p className="muted-text">
                         {streamStatus === "connecting" ? "正在连接模型..." : streamStatus === "streaming" ? "模型正在流式生成中..." : streamStatus === "finalizing" ? "正在整理最终结果并刷新历史..." : "等待开始"}
                     </p>
-                    <pre className="answer-box">{streamingAnswer || "模型正在综合分析成绩、兴趣和补充背景..."}</pre>
+                    <div className="chat-bubble assistant">
+                        <strong>AI（流式正文）</strong>
+                        <pre className="answer-box">{streamingAnswer || "模型正在综合分析成绩、兴趣和补充背景..."}</pre>
+                        {streamingReasoning ? (
+                            <details className="reasoning-box" open>
+                                <summary>思考过程（流式）</summary>
+                                <pre>{streamingReasoning}</pre>
+                            </details>
+                        ) : null}
+                    </div>
                 </article>
             ) : null}
 

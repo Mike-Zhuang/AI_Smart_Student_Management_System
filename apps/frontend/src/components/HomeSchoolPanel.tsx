@@ -1,8 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
-import { leaveStatusLabelMap, leaveTypeLabelMap, parentConfirmStatusLabelMap } from "../lib/labels";
+import type { SupportedModel } from "../lib/ai";
+import { leaveStatusLabelMap, leaveTypeLabelMap, mapLabel, parentConfirmStatusLabelMap } from "../lib/labels";
 import { downloadExport } from "../lib/export";
+import { consumeSseStream } from "../lib/sse";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 import { ConfirmActionButton } from "./ConfirmActionButton";
@@ -56,7 +58,10 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
         emergencyContact: ""
     });
     const [apiKey, setApiKey] = useState(storage.getApiKey());
+    const [models, setModels] = useState<SupportedModel[]>([]);
+    const [model, setModel] = useState("glm-4.7-flash");
     const [draftMap, setDraftMap] = useState<Record<number, string>>({});
+    const [draftReasoningMap, setDraftReasoningMap] = useState<Record<number, string>>({});
     const [sending, setSending] = useState(false);
     const [readingMap, setReadingMap] = useState<Record<number, boolean>>({});
     const [draftingMap, setDraftingMap] = useState<Record<number, boolean>>({});
@@ -65,14 +70,18 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
 
     const load = async () => {
         try {
-            const [messageResp, leaveResp, studentResp] = await Promise.all([
+            const [messageResp, leaveResp, studentResp, modelResp] = await Promise.all([
                 apiRequest<MessageItem[]>("/api/home-school/messages"),
                 apiRequest<LeaveItem[]>("/api/home-school/leave-requests"),
-                apiRequest<StudentOption[]>("/api/students")
+                apiRequest<StudentOption[]>("/api/students"),
+                apiRequest<SupportedModel[]>("/api/ai/models")
             ]);
             setMessages(messageResp.data);
             setLeaves(leaveResp.data);
             setStudents(studentResp.data);
+            const textModels = modelResp.data.filter((item) => item.supportsStreaming);
+            setModels(textModels);
+            setModel(textModels.find((item) => item.isDefault)?.id ?? textModels[0]?.id ?? "glm-4.7-flash");
             if (!leaveForm.studentId && studentResp.data.length > 0) {
                 setLeaveForm((prev) => ({ ...prev, studentId: studentResp.data[0].id }));
             }
@@ -146,11 +155,25 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
         setDraftingMap((prev) => ({ ...prev, [id]: true }));
         try {
             storage.setApiKey(apiKey.trim());
-            const response = await apiRequest<{ draft: string }>(`/api/home-school/messages/${id}/ai-reply-draft`, {
-                method: "POST",
-                body: JSON.stringify({ apiKey: apiKey.trim(), model: "glm-4.7-flash" })
-            });
-            setDraftMap((prev) => ({ ...prev, [id]: response.data.draft }));
+            setDraftMap((prev) => ({ ...prev, [id]: "" }));
+            setDraftReasoningMap((prev) => ({ ...prev, [id]: "" }));
+            const response = await consumeSseStream(
+                `/api/home-school/messages/${id}/ai-reply-draft-stream`,
+                {
+                    method: "POST",
+                    body: JSON.stringify({ apiKey: apiKey.trim(), model }),
+                    headers: { "Content-Type": "application/json" }
+                },
+                {
+                    onTextDelta: (delta) => {
+                        setDraftMap((prev) => ({ ...prev, [id]: `${prev[id] ?? ""}${delta}` }));
+                    },
+                    onReasoningDelta: (delta) => {
+                        setDraftReasoningMap((prev) => ({ ...prev, [id]: `${prev[id] ?? ""}${delta}` }));
+                    }
+                }
+            );
+            setDraftMap((prev) => ({ ...prev, [id]: response.draft ?? prev[id] ?? "" }));
         } catch (err) {
             setError(err instanceof Error ? err.message : "生成草稿失败");
         } finally {
@@ -162,7 +185,7 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
         <section className="panel-grid">
             <article className="panel-card wide">
                 <h3>家校沟通与请假管理</h3>
-                <p>当前待处理请假 {pendingCount} 条。系统已按“学生填报 → 家长确认 → 班主任审批 → 返校销假”管理流程运行。</p>
+                <p>当前待处理请假 {pendingCount} 条。学生提交需家长确认，家长代提交可直接进入班主任审批，返校后仍需完成销假。</p>
             </article>
 
             {canBroadcast ? (
@@ -260,6 +283,13 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                                 {canBroadcast ? (
                                     <>
                                         <input value={apiKey} placeholder="API Key（生成回复草稿）" onChange={(event) => setApiKey(event.target.value)} />
+                                        <select value={model} onChange={(event) => setModel(event.target.value)}>
+                                            {models.map((item) => (
+                                                <option key={item.id} value={item.id}>
+                                                    {item.name} / {item.pricingTier === "paid" ? "收费" : "免费"}
+                                                </option>
+                                            ))}
+                                        </select>
                                         <button className="secondary-btn" onClick={() => void generateDraft(item.id)} disabled={Boolean(draftingMap[item.id])}>
                                             {draftingMap[item.id] ? "生成中..." : "AI 生成回复草稿"}
                                         </button>
@@ -267,6 +297,12 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                                 ) : null}
                             </div>
                             {draftMap[item.id] ? <p className="ai-draft">AI 草稿：{draftMap[item.id]}</p> : null}
+                            {draftReasoningMap[item.id] ? (
+                                <details className="reasoning-box" open={Boolean(draftingMap[item.id])}>
+                                    <summary>思考过程</summary>
+                                    <pre>{draftReasoningMap[item.id]}</pre>
+                                </details>
+                            ) : null}
                         </div>
                     ))}
                 </div>
@@ -329,9 +365,9 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                                     <td>{leaveTypeLabelMap[item.leaveType] ?? item.leaveType}</td>
                                     <td>{item.startAt} - {item.endAt}</td>
                                     <td>
-                                        <strong>{leaveStatusLabelMap[item.status] ?? item.status}</strong>
+                                        <strong>{leaveStatusLabelMap[item.status] ?? mapLabel(item.status, leaveStatusLabelMap)}</strong>
                                         <br />
-                                        <small>家长：{parentConfirmStatusLabelMap[item.parentConfirmStatus ?? "pending"] ?? item.parentConfirmStatus}</small>
+                                        <small>家长：{parentConfirmStatusLabelMap[item.parentConfirmStatus ?? "pending"] ?? mapLabel(item.parentConfirmStatus ?? "pending", parentConfirmStatusLabelMap)}</small>
                                     </td>
                                     <td>
                                         <div className="timeline-list">

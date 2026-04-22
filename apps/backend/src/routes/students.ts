@@ -506,6 +506,7 @@ studentsRouter.post("/classes/batch-delete", requireAuth, (req: AuthedRequest, r
         galleryCount: 0,
         groupScoreCount: 0,
         teacherLinkCount: 0,
+        retainedIssuanceBatchCount: 0,
         deletedParentAccountCount: 0,
         deletedTeacherAccountCount: 0
     };
@@ -525,6 +526,16 @@ studentsRouter.post("/classes/batch-delete", requireAuth, (req: AuthedRequest, r
     summary.galleryCount = countByClassSet("class_gallery", "class_name");
     summary.groupScoreCount = countByClassSet("group_score_records", "class_name");
     summary.teacherLinkCount = countByClassSet("teacher_class_links", "class_name");
+
+    const parentUserIds = studentRows.length > 0
+        ? (db.prepare(
+            `SELECT DISTINCT parent_user_id as parentUserId
+             FROM parent_student_links
+             WHERE student_id IN (${studentRows.map(() => "?").join(",")})`
+        ).all(...studentRows.map((item) => item.id)) as Array<{ parentUserId: number | null }>)
+            .map((item) => item.parentUserId)
+            .filter((item): item is number => typeof item === "number")
+        : [];
 
     studentRows.forEach((item) => {
         const count = (tableName: string, fieldName = "student_id"): number => {
@@ -547,6 +558,27 @@ studentsRouter.post("/classes/batch-delete", requireAuth, (req: AuthedRequest, r
     });
 
     const transaction = db.transaction(() => {
+        const teacherIds = (db.prepare(
+            `SELECT DISTINCT teacher_user_id as teacherUserId
+             FROM teacher_class_links
+             WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`
+        ).all(...normalizedClassNames) as Array<{ teacherUserId: number }>).map((item) => item.teacherUserId);
+        const linkedStudentAccountIds = studentRows.length > 0
+            ? (db.prepare(
+                `SELECT id
+                 FROM users
+                 WHERE linked_student_id IN (${studentRows.map(() => "?").join(",")}) AND role = ?`
+            ).all(...studentRows.map((item) => item.id), ROLES.STUDENT) as Array<{ id: number }>).map((item) => item.id)
+            : [];
+        const reassignedUserIds = [...new Set([...teacherIds, ...parentUserIds, ...linkedStudentAccountIds])];
+        if (reassignedUserIds.length > 0) {
+            summary.retainedIssuanceBatchCount = (db.prepare(
+                `SELECT COUNT(*) as count
+                 FROM account_issuance_batches
+                 WHERE operator_user_id IN (${reassignedUserIds.map(() => "?").join(",")})`
+            ).get(...reassignedUserIds) as { count: number }).count;
+        }
+
         for (const student of studentRows) {
             deleteStudentById(student.id);
         }
@@ -558,11 +590,6 @@ studentsRouter.post("/classes/batch-delete", requireAuth, (req: AuthedRequest, r
         db.prepare(`DELETE FROM group_score_records WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
         db.prepare(`DELETE FROM student_groups WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
 
-        const teacherIds = (db.prepare(
-            `SELECT DISTINCT teacher_user_id as teacherUserId
-             FROM teacher_class_links
-             WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`
-        ).all(...normalizedClassNames) as Array<{ teacherUserId: number }>).map((item) => item.teacherUserId);
         db.prepare(`DELETE FROM teacher_class_links WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
 
         summary.deletedParentAccountCount = removeOrphanParentAccounts().length;

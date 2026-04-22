@@ -1,10 +1,10 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { fillTemplate, getTemplateById } from "../config/promptTemplates.js";
 import { getSupportedModelById } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, canAccessStudent } from "../middleware/auth.js";
-import { callZhipu } from "../services/zhipu.js";
+import { callZhipu, streamZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 import { normalizeExamName, repairText } from "../utils/text.js";
@@ -15,6 +15,24 @@ const aiDiagnosisSchema = z.object({
     apiKey: z.string().min(10),
     model: z.string().min(3)
 });
+
+const initSse = (res: Response): void => {
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    if (typeof res.flushHeaders === "function") {
+        res.flushHeaders();
+    }
+};
+
+const sendSse = (res: Response, event: string, payload: unknown): void => {
+    if (res.writableEnded) {
+        return;
+    }
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+};
 
 growthRouter.get("/students/:studentId/profile", requireAuth, (req: AuthedRequest, res) => {
     const studentId = Number(req.params.studentId);
@@ -256,5 +274,136 @@ growthRouter.post("/students/:studentId/ai-diagnosis", requireAuth, async (req: 
     } catch (error) {
         const reason = error instanceof Error ? error.message : "未知错误";
         res.status(502).json({ success: false, message: `模型调用失败: ${reason}` });
+    }
+});
+
+growthRouter.post("/students/:studentId/ai-diagnosis-stream", requireAuth, async (req: AuthedRequest, res) => {
+    if (!req.user) {
+        res.status(401).json({ success: false, message: "未登录" });
+        return;
+    }
+
+    const studentId = Number(req.params.studentId);
+    if (Number.isNaN(studentId) || !canAccessStudent(req, studentId)) {
+        res.status(403).json({ success: false, message: "无权分析该学生" });
+        return;
+    }
+
+    const parsed = aiDiagnosisSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const student = db
+        .prepare(
+            `SELECT id, name, grade, class_name as className, interests, career_goal as careerGoal
+             FROM students
+             WHERE id = ?`
+        )
+        .get(studentId) as
+        | {
+            id: number;
+            name: string;
+            grade: string;
+            className: string;
+            interests: string | null;
+            careerGoal: string | null;
+        }
+        | undefined;
+
+    if (!student) {
+        res.status(404).json({ success: false, message: "学生不存在" });
+        return;
+    }
+
+    const template = getTemplateById("growth-risk-v1");
+    const modelMeta = getSupportedModelById(parsed.data.model);
+    if (!template || !modelMeta || !modelMeta.supportsStreaming) {
+        res.status(400).json({ success: false, message: "模板或模型不可用" });
+        return;
+    }
+
+    if (template.outputFormat === "json_object" && !modelMeta.supportsJsonMode) {
+        res.status(400).json({ success: false, message: `模型 ${modelMeta.name} 不支持结构化输出` });
+        return;
+    }
+
+    const trends = db
+        .prepare(
+            `SELECT exam_name as examName, ROUND(AVG(score), 1) as avgScore
+             FROM exam_results
+             WHERE student_id = ?
+             GROUP BY exam_name
+             ORDER BY exam_date ASC`
+        )
+        .all(studentId) as Array<{ examName: string; avgScore: number }>;
+
+    const alerts = db
+        .prepare(
+            `SELECT alert_type as alertType, content, status
+             FROM alerts
+             WHERE student_id = ?
+             ORDER BY created_at DESC
+             LIMIT 6`
+        )
+        .all(studentId) as Array<{ alertType: string; content: string; status: string }>;
+
+    const studentData = [
+        `姓名: ${student.name}`,
+        `班级: ${student.grade} ${student.className}`,
+        `兴趣: ${student.interests ?? "暂无"}`,
+        `目标: ${student.careerGoal ?? "暂无"}`,
+        `趋势: ${trends.map((item) => `${item.examName}:${item.avgScore}`).join("; ") || "暂无"}`,
+        `预警: ${alerts.map((item) => `${item.alertType}-${item.content}-${item.status}`).join("; ") || "暂无"}`
+    ].join("\n");
+
+    const prompt = `${fillTemplate(template.template, { studentData })}\n\n输出规范:\n${template.outputSpec}`;
+
+    initSse(res);
+    sendSse(res, "conversation", { studentId, model: parsed.data.model });
+
+    try {
+        const result = await streamZhipu(
+            {
+                apiKey: parsed.data.apiKey,
+                model: parsed.data.model,
+                prompt,
+                systemPrompt: template.systemPrompt,
+                responseFormat: template.outputFormat,
+                enableThinking: modelMeta.thinking
+            },
+            {
+                onTextDelta: (delta) => sendSse(res, "delta", { delta }),
+                onReasoningDelta: (delta) => sendSse(res, "reasoning-delta", { delta }),
+                onUsage: (usage) => sendSse(res, "usage", usage)
+            }
+        );
+
+        logAudit({
+            userId: req.user.id,
+            actionModule: "growth",
+            actionType: "ai_diagnosis_stream",
+            objectType: "student",
+            objectId: studentId,
+            detail: { model: parsed.data.model },
+            ipAddress: extractIp(req)
+        });
+
+        sendSse(res, "complete", {
+            studentId,
+            answer: result.content,
+            reasoning: result.reasoning,
+            model: parsed.data.model,
+            usage: result.usage,
+            finishReason: result.finishReason
+        });
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : "未知错误";
+        sendSse(res, "error", { message: `模型调用失败: ${reason}` });
+    } finally {
+        if (!res.writableEnded) {
+            res.end();
+        }
     }
 });

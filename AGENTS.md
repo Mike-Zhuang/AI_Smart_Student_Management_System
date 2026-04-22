@@ -327,6 +327,46 @@
 - 验证结果：
   - 已检查 `submit/` 中关键文档完整存在且 `AGENTS.md`、`node_modules/` 不存在。
 
+## 2026-04-22 20:12:36 +0800
+
+- 完成 P0 级乱码治理与删除链路止血：
+  - `apps/backend/src/utils/text.ts` 重构为统一编码修复流水线，补充 UTF-8 / GBK / GB18030 多候选解码、误解码回推、中文可读性评分、考试名称专项规范化与更多乱码特征识别。
+  - `apps/backend/src/routes/dataImport.ts` 将 CSV / XLSX 解析后的列名、单元格、记录值统一接入 `repairText / repairRecordStrings`，成绩数据清理查询也改为走考试名称修复链路。
+  - `apps/backend/src/routes/auth.ts`、`apps/backend/src/routes/admin.ts`、相关查询出口补齐乱码修复与系统审计账号过滤，降低历史脏数据直接上屏概率。
+- 修复整班级联删除 `FOREIGN KEY constraint failed`：
+  - `apps/backend/src/utils/accountMaintenance.ts` 新增系统审计保留账号，删除用户前自动接管 `account_issuance_batches.operator_user_id` 历史引用。
+  - `apps/backend/src/routes/students.ts` 调整整班删除统计与事务顺序，新增“保留的历史账号发放批次数”摘要，避免大批量删班时因审计引用导致失败。
+- 收口请假流程与全站状态汉化：
+  - `apps/backend/src/routes/homeSchool.ts` 将“家长代提交请假”时间线改为直接进入班主任审批，不再显示无意义的待家长确认节点。
+  - `apps/frontend/src/lib/labels.ts` 增补通用状态中文映射；`HomeSchoolPanel`、`OverviewPanel`、`AccountPanel` 等页面去除英文状态/角色 fallback。
+- 收紧 AI 助手展示边界并优化提示词：
+  - `apps/backend/src/routes/ai.ts` 的模板列表接口不再返回 `systemPrompt`、`outputSpec`、`outputFormat` 等内部规则正文，只保留用户说明、变量说明与结构化能力标记。
+  - `apps/backend/src/config/promptTemplates.ts` 优化选科、成长、家校等系统提示词，强化结构化输出约束与教师场景表达。
+  - `apps/frontend/src/components/AiLabPanel.tsx` 同步改为只依据 `requiresJsonMode` 做模型筛选，不再依赖展示内部格式规范。
+- 文档与真实模型联调同步：
+  - 更新 `README.md`、`GUIDE.md`，补充乱码治理、整班删除审计保留、家长代提交请假与 AI 提示词隐藏说明。
+  - 本地使用一次性智谱 Key 做最小真实联调：`glm-5.1`、`glm-5-turbo` 流式正文/思考/完成事件正常；`glm-4.7-flash` 当前更易触发上游限流。
+- 验证结果：
+  - 已执行 `npm run build -w @ms/backend` 与 `npm run build -w @ms/frontend` 通过，待文档更新后一并做全量 `npm run build` 复核。
+
+## 2026-04-22 19:57:12 +0800
+
+- 全局 AI 流式调用链路重构：
+  - `apps/backend/src/constants.ts` 重建模型能力矩阵，统一使用小写 `model` 字段，并补齐收费/免费、流式、结构化、视觉、思考等能力标签。
+  - `apps/backend/src/services/zhipu.ts` 增强 SSE 解析，统一提取 `delta.content`、`delta.reasoning_content`、`usage`、`finish_reason`，并保留 reasoning-only 自动降级重试。
+  - `apps/backend/src/routes/ai.ts` 为通用聊天与模板聊天流补齐 `usage` 事件，新增图片上传流式接口 `POST /api/ai/upload-image-chat-stream`，图片仅走内存中转为 data URL，不做永久存储。
+- 结构化输出与选科建议稳定性修复：
+  - 新增 `apps/backend/src/utils/structuredOutput.ts`，支持 fenced JSON / 裸 JSON / 轻量字段修复，避免半截 JSON 直接导致整条链路报废。
+  - `apps/backend/src/routes/career.ts` 改为“边流式展示、边服务端累积、完成后校验并落库”，并兼容 `summary/reasoning`、`majorSuggestions` 等常见模型返回差异。
+  - `apps/backend/src/config/promptTemplates.ts` 收紧选科模板输出要求，明确禁止 markdown 包裹和自然语言前后缀。
+- 前端 AI 体验统一升级：
+  - 新增 `apps/frontend/src/lib/ai.ts` 与 `apps/frontend/src/lib/sse.ts`，统一模型能力类型和共享 SSE 解析器，覆盖多 `data:`、`[DONE]`、reasoning/content 双流及异常兜底。
+  - 重写 `apps/frontend/src/components/AiLabPanel.tsx`：默认全流式、模板结构化模型过滤、模型能力中文标签、图片本地上传、聊天区空状态高度修复。
+  - `apps/frontend/src/components/CareerPanel.tsx`、`apps/frontend/src/components/GrowthPanel.tsx`、`apps/frontend/src/components/HomeSchoolPanel.tsx` 全部切换为流式展示正文与思考过程。
+  - `apps/frontend/src/styles.css` 补充流式聊天区与追问输入区约束，修复空会话时输入框被异常拉长的问题。
+- 验证结果：
+  - 已执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）通过。
+
 ## 2026-04-22 18:58:03 +0800
 
 - 完成“真实数据优先”的二轮修复与体验重构：

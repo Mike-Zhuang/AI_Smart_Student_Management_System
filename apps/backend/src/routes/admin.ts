@@ -67,7 +67,7 @@ adminRouter.get("/invite-codes", (_req, res) => {
 });
 
 adminRouter.get("/system-overview", (_req, res) => {
-    const users = db.prepare("SELECT role, COUNT(*) as count FROM users GROUP BY role").all();
+    const users = db.prepare("SELECT role, COUNT(*) as count FROM users WHERE username != '__system_audit__' GROUP BY role").all();
     const students = db.prepare("SELECT COUNT(*) as count FROM students").get() as { count: number };
     const messages = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
 
@@ -262,7 +262,7 @@ adminRouter.get("/export/evidence-report", (req, res) => {
     const authedReq = req as AuthedRequest;
     const format = req.query.format === "csv" ? "csv" : "json";
 
-    const overview = db.prepare("SELECT role, COUNT(*) as count FROM users GROUP BY role").all() as Array<{
+    const overview = db.prepare("SELECT role, COUNT(*) as count FROM users WHERE username != '__system_audit__' GROUP BY role").all() as Array<{
         role: string;
         count: number;
     }>;
