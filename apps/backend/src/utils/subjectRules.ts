@@ -124,21 +124,6 @@ export const validateSelectionByStage = (params: {
     | { ok: false; message: string } => {
     const { stage, firstSelectedSubject, secondSelectedSubject, thirdSelectedSubject } = params;
 
-    if (stage === "高一上") {
-        if (firstSelectedSubject || secondSelectedSubject || thirdSelectedSubject) {
-            return { ok: false, message: "高一上学段不允许提交选科组合" };
-        }
-
-        return {
-            ok: true,
-            selectionStatus: "locked",
-            firstSelectedSubject: null,
-            secondSelectedSubject: null,
-            thirdSelectedSubject: null,
-            subjectCombination: null
-        };
-    }
-
     if (!firstSelectedSubject || !secondSelectedSubject || !thirdSelectedSubject) {
         return { ok: false, message: `${stage}学段需完整选择“1门首选科 + 2门再选科”` };
     }

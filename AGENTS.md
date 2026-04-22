@@ -326,3 +326,38 @@
   - 更新根 `.gitignore`，新增 `submit/` 忽略规则，避免提交过程将打包副本再次纳入版本管理。
 - 验证结果：
   - 已检查 `submit/` 中关键文档完整存在且 `AGENTS.md`、`node_modules/` 不存在。
+
+## 2026-04-22 16:53:39 +0800
+
+- 完成“真实校园场景化”重构第一阶段落地：
+  - 后端删除教研模块路由与模板，新增 `apps/backend/src/routes/headTeacher.ts` 班级治理接口并在 `server.ts` 挂载 `/api/head-teacher/*`。
+  - `apps/backend/src/db.ts` 重构请假流程字段，移除 `teaching_tasks` / `teaching_research`，新增班级日志、心灵驿站、小组评比、班级风采、班级简介等数据表，并加入历史数据库平滑迁移。
+  - `apps/backend/src/routes/homeSchool.ts` 改为真实高中请假流程：学生填报、家长确认、班主任审批、返校销假，并补齐批量删除。
+  - `apps/backend/src/routes/career.ts` 改为支持 `supplementalContext` 的选科建议生成与 SSE 流式输出；`apps/backend/src/utils/subjectRules.ts` 放开高一上直接选科。
+  - `apps/backend/src/routes/dataImport.ts`、`apps/backend/src/utils/text.ts` 完成导入乱码修复、考试名称规范化、成绩/教师关系管理与批量删除接口。
+- 前端页面与文案重构：
+  - 新增 `apps/frontend/src/lib/labels.ts` 统一中文标签映射，`AppShell.tsx`、`OverviewPanel.tsx` 改成按角色呈现真实首页信息，移除教研导航。
+  - `apps/frontend/src/components/HomeSchoolPanel.tsx` 新增真实请假时间线、按角色操作与请假批量删除。
+  - `apps/frontend/src/components/CareerPanel.tsx` 改为“生涯发展与选科建议”，支持流式生成、自由补充信息、免费/收费模型标记与高一选科保存。
+  - `apps/frontend/src/components/DataImportPanel.tsx` 改为“导入 + 管理 + 清理”，补齐学生、成绩、教师关系的批量删除能力。
+  - `apps/frontend/src/components/HeadTeacherPanel.tsx` 升级为“班级治理中心”，新增班级日志、心灵驿站、小组评比、班级风采、班级简介等管理入口，并支持上传内容删除。
+  - `apps/frontend/src/components/GrowthPanel.tsx` 修复无成绩时的异常占位，改为明确提示“暂无成绩数据，请先导入成绩”。
+- 文档与工程清理：
+  - 删除 `apps/frontend/src/components/TeachingPanel.tsx` 与 `apps/backend/src/routes/teaching.ts`。
+  - 更新 `README.md`、`GUIDE.md`、`docs/defense-demo-script.md` 的模块口径，改为真实校园使用场景。
+- 验证结果：
+  - 执行 `npm run build`（后端 `tsc` + 前端 `tsc -b && vite build`）通过。
+
+## 2026-04-22 17:31:09 +0800
+
+- 完成账号发放留存与组织架构能力补齐：
+  - 后端新增 `apps/backend/src/utils/accountIssuance.ts`，实现一次性密码加密留存、发放批次创建、未改密账号筛选下载与 Excel 导出。
+  - `apps/backend/src/db.ts` 新增 `account_issuance_batches`、`account_issuance_items` 表及索引；`apps/backend/src/utils/text.ts` 将账号发放批次纳入乱码修复覆盖范围。
+  - `apps/backend/src/routes/auth.ts` 新增账号发放批次查询/明细/整批下载/按勾选下载接口，并在“修改密码”“重置密码”链路中自动失效旧一次性密码或生成新批次。
+  - `apps/backend/src/routes/dataImport.ts` 在学生导入、教师导入后自动写入账号发放批次，返回 `issuanceBatchId` 供前端跳转台账。
+  - 新增 `apps/backend/src/routes/orgStructure.ts` 并在 `server.ts` 挂载 `/api/org-structure/*`，支持按班级/按教师查看全校组织关系。
+- 前端交互与文档同步：
+  - `apps/frontend/src/components/AccountPanel.tsx` 重构为“登录说明 + 账号发放台账 + 批次记录 + 批次明细”组合页，支持筛选待改密账号、批量下载未改密账号、查看单次重置批次。
+  - 新增 `apps/frontend/src/components/OrgStructurePanel.tsx`，并在 `AppShell.tsx`、`DashboardPage.tsx` 增加“组织架构”导航与路由。
+  - `apps/frontend/src/components/DataImportPanel.tsx` 补充“查看本次发放批次”入口；`apps/frontend/src/lib/export.ts` 新增 POST 下载能力，支持读取下载文件名与跳过数量。
+  - 更新 `apps/frontend/src/styles.css`、`README.md`、`GUIDE.md`、`docs/defense-demo-script.md`，同步组织架构与账号发放批次的真实使用说明。

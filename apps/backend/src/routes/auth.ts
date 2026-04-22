@@ -4,6 +4,12 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { ROLES } from "../constants.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import {
+    buildIssuanceWorkbookBuffer,
+    createIssuanceBatch,
+    getDownloadableIssuanceItems,
+    invalidateUserIssuancePasswords
+} from "../utils/accountIssuance.js";
 import { comparePassword, generateTemporaryPassword, hashPassword, signToken } from "../utils/auth.js";
 import type { AuthUser, AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
@@ -30,6 +36,10 @@ const updateProfileSchema = z.object({
 const changePasswordSchema = z.object({
     oldPassword: z.string().min(6),
     newPassword: z.string().min(8)
+});
+
+const selectedIssuanceItemsSchema = z.object({
+    itemIds: z.array(z.number().int().positive()).min(1)
 });
 
 export const authRouter = Router();
@@ -80,6 +90,59 @@ const getUserById = (id: number) => {
             createdAt: string;
         }
         | undefined;
+};
+
+const buildDownloadFilename = (title: string): string => {
+    const safeTitle = title.replace(/[\\/:*?"<>|]/g, "-").trim() || "账号发放";
+    return `${safeTitle}.xlsx`;
+};
+
+const resolveLoginUrl = (req: AuthedRequest): string => {
+    if (typeof req.headers.origin === "string" && req.headers.origin.trim()) {
+        return `${req.headers.origin.replace(/\/+$/, "")}/login`;
+    }
+
+    if (typeof req.headers.referer === "string" && req.headers.referer.trim()) {
+        try {
+            const refererUrl = new URL(req.headers.referer);
+            return `${refererUrl.origin}/login`;
+        } catch {
+            return "请使用当前系统登录页";
+        }
+    }
+
+    return "请使用当前系统登录页";
+};
+
+const buildRelatedNameForUser = (user: {
+    id: number;
+    role: AuthUser["role"];
+    linkedStudentId: number | null;
+    displayName: string;
+}): string => {
+    if (user.linkedStudentId) {
+        const student = db.prepare(
+            `SELECT student_no as studentNo, name, class_name as className
+             FROM students
+             WHERE id = ?`
+        ).get(user.linkedStudentId) as { studentNo: string; name: string; className: string } | undefined;
+
+        if (student) {
+            return `${student.name} / ${student.studentNo} / ${student.className}`;
+        }
+    }
+
+    const teacherClasses = db.prepare(
+        `SELECT GROUP_CONCAT(class_name, '、') as classNames
+         FROM teacher_class_links
+         WHERE teacher_user_id = ?`
+    ).get(user.id) as { classNames: string | null } | undefined;
+
+    if (teacherClasses?.classNames) {
+        return `${user.displayName} / ${teacherClasses.classNames}`;
+    }
+
+    return user.displayName;
 };
 
 authRouter.post("/login", (req, res) => {
@@ -317,6 +380,7 @@ authRouter.patch("/me/password", requireAuth, (req: AuthedRequest, res) => {
          SET password_hash = ?, must_change_password = 0, password_reset_at = ?
          WHERE id = ?`
     ).run(hashPassword(parsed.data.newPassword), dayjs().toISOString(), req.user.id);
+    invalidateUserIssuancePasswords(db, req.user.id);
 
     const updated = getUserById(req.user.id);
     if (!updated) {
@@ -349,11 +413,57 @@ authRouter.get("/accounts", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER,
                     u.created_at as createdAt,
                     s.student_no as studentNo,
                     s.name as studentName,
-                    s.class_name as className
+                    s.class_name as className,
+                    (
+                        SELECT GROUP_CONCAT(tcl.class_name, '、')
+                        FROM teacher_class_links tcl
+                        WHERE tcl.teacher_user_id = u.id
+                    ) as teacherClasses,
+                    (
+                        SELECT GROUP_CONCAT(tcl.subject_name, '、')
+                        FROM teacher_class_links tcl
+                        WHERE tcl.teacher_user_id = u.id
+                    ) as teacherSubjects,
+                    (
+                        SELECT ai.id
+                        FROM account_issuance_items ai
+                        WHERE ai.user_id = u.id
+                        ORDER BY ai.id DESC
+                        LIMIT 1
+                    ) as latestIssuanceItemId,
+                    (
+                        SELECT ai.batch_id
+                        FROM account_issuance_items ai
+                        WHERE ai.user_id = u.id
+                        ORDER BY ai.id DESC
+                        LIMIT 1
+                    ) as latestIssuanceBatchId,
+                    (
+                        SELECT ai.created_at
+                        FROM account_issuance_items ai
+                        WHERE ai.user_id = u.id
+                        ORDER BY ai.id DESC
+                        LIMIT 1
+                    ) as latestIssuanceAt,
+                    (
+                        SELECT aib.title
+                        FROM account_issuance_items ai
+                        JOIN account_issuance_batches aib ON aib.id = ai.batch_id
+                        WHERE ai.user_id = u.id
+                        ORDER BY ai.id DESC
+                        LIMIT 1
+                    ) as latestIssuanceTitle,
+                    (
+                        SELECT ai.can_download_password
+                        FROM account_issuance_items ai
+                        WHERE ai.user_id = u.id
+                        ORDER BY ai.id DESC
+                        LIMIT 1
+                    ) as canDownloadPassword
              FROM users u
              LEFT JOIN students s ON s.id = u.linked_student_id
              ORDER BY u.created_at DESC
-             LIMIT 200`
+             LIMIT 400`
         )
         .all();
 
@@ -374,11 +484,29 @@ authRouter.post("/accounts/:id/reset-password", requireAuth, requireRole(ROLES.A
     }
 
     const temporaryPassword = generateTemporaryPassword();
+    invalidateUserIssuancePasswords(db, target.id, "admin_reset_password");
     db.prepare(
         `UPDATE users
          SET password_hash = ?, must_change_password = 1, password_reset_at = ?, is_active = 1
          WHERE id = ?`
     ).run(hashPassword(temporaryPassword), dayjs().toISOString(), target.id);
+    const batchId = createIssuanceBatch(db, {
+        batchType: "manual_reset",
+        sourceModule: "auth",
+        operatorUserId: req.user.id,
+        title: `人工重置密码 ${target.displayName} ${dayjs().format("YYYY-MM-DD HH:mm")}`,
+        note: `为账号 ${target.username} 重新发放一次性密码`,
+        items: [
+            {
+                userId: target.id,
+                username: target.username,
+                temporaryPassword,
+                displayName: target.displayName,
+                role: target.role,
+                relatedName: buildRelatedNameForUser(target)
+            }
+        ]
+    });
 
     logAudit({
         userId: req.user.id,
@@ -386,7 +514,7 @@ authRouter.post("/accounts/:id/reset-password", requireAuth, requireRole(ROLES.A
         actionType: "reset_password",
         objectType: "user",
         objectId: target.id,
-        detail: { targetUsername: target.username, targetRole: target.role },
+        detail: { targetUsername: target.username, targetRole: target.role, issuanceBatchId: batchId },
         ipAddress: extractIp(req)
     });
 
@@ -398,10 +526,124 @@ authRouter.post("/accounts/:id/reset-password", requireAuth, requireRole(ROLES.A
             username: target.username,
             displayName: target.displayName,
             role: target.role,
-            temporaryPassword,
-            mustChangePassword: true
+            mustChangePassword: true,
+            issuanceBatchId: batchId
         }
     });
+});
+
+authRouter.get("/account-issuance-batches", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (_req, res) => {
+    const rows = db
+        .prepare(
+            `SELECT b.id, b.batch_type as batchType, b.source_module as sourceModule, b.title, b.note, b.created_at as createdAt,
+                    u.display_name as operatorName,
+                    (
+                        SELECT COUNT(*) FROM account_issuance_items ai WHERE ai.batch_id = b.id
+                    ) as totalCount,
+                    (
+                        SELECT COUNT(*) FROM account_issuance_items ai WHERE ai.batch_id = b.id AND ai.can_download_password = 1
+                    ) as downloadableCount
+             FROM account_issuance_batches b
+             LEFT JOIN users u ON u.id = b.operator_user_id
+             ORDER BY b.created_at DESC, b.id DESC
+             LIMIT 200`
+        )
+        .all();
+
+    res.json({ success: true, message: "查询成功", data: rows });
+});
+
+authRouter.get("/account-issuance-batches/:batchId", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (req, res) => {
+    const batchId = Number(req.params.batchId);
+    if (Number.isNaN(batchId) || batchId <= 0) {
+        res.status(400).json({ success: false, message: "批次ID不合法" });
+        return;
+    }
+
+    const batch = db
+        .prepare(
+            `SELECT b.id, b.batch_type as batchType, b.source_module as sourceModule, b.title, b.note, b.created_at as createdAt,
+                    u.display_name as operatorName,
+                    (
+                        SELECT COUNT(*) FROM account_issuance_items ai WHERE ai.batch_id = b.id
+                    ) as totalCount,
+                    (
+                        SELECT COUNT(*) FROM account_issuance_items ai WHERE ai.batch_id = b.id AND ai.can_download_password = 1
+                    ) as downloadableCount
+             FROM account_issuance_batches b
+             LEFT JOIN users u ON u.id = b.operator_user_id
+             WHERE b.id = ?`
+        )
+        .get(batchId);
+
+    if (!batch) {
+        res.status(404).json({ success: false, message: "账号发放批次不存在" });
+        return;
+    }
+
+    const items = db
+        .prepare(
+            `SELECT id, user_id as userId, username, display_name as displayName, role,
+                    related_name as relatedName, student_no as studentNo, class_name as className,
+                    subject_name as subjectName, can_download_password as canDownloadPassword,
+                    invalidated_at as invalidatedAt, invalidation_reason as invalidationReason,
+                    created_at as createdAt
+             FROM account_issuance_items
+             WHERE batch_id = ?
+             ORDER BY id ASC`
+        )
+        .all(batchId);
+
+    res.json({ success: true, message: "查询成功", data: { batch, items } });
+});
+
+authRouter.post("/account-issuance-batches/:batchId/download", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (req: AuthedRequest, res) => {
+    const batchId = Number(req.params.batchId);
+    if (Number.isNaN(batchId) || batchId <= 0) {
+        res.status(400).json({ success: false, message: "批次ID不合法" });
+        return;
+    }
+
+    const batch = db
+        .prepare(`SELECT id, title FROM account_issuance_batches WHERE id = ?`)
+        .get(batchId) as { id: number; title: string } | undefined;
+    if (!batch) {
+        res.status(404).json({ success: false, message: "账号发放批次不存在" });
+        return;
+    }
+
+    const { items, skippedCount } = getDownloadableIssuanceItems(db, { batchId });
+    if (items.length === 0) {
+        res.status(400).json({ success: false, message: "该批次账号均已改密，当前没有可再次下载的密码" });
+        return;
+    }
+
+    const buffer = buildIssuanceWorkbookBuffer(items, resolveLoginUrl(req));
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(buildDownloadFilename(batch.title))}`);
+    res.setHeader("X-Skipped-Count", String(skippedCount));
+    res.end(buffer);
+});
+
+authRouter.post("/account-issuance-items/download", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (req: AuthedRequest, res) => {
+    const parsed = selectedIssuanceItemsSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const { items, skippedCount } = getDownloadableIssuanceItems(db, { itemIds: parsed.data.itemIds });
+    if (items.length === 0) {
+        res.status(400).json({ success: false, message: "选中的账号已全部改密，无法再次下载原始一次性密码" });
+        return;
+    }
+
+    const buffer = buildIssuanceWorkbookBuffer(items, resolveLoginUrl(req));
+    const title = `选中未改密账号 ${dayjs().format("YYYY-MM-DD HH:mm")}`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(buildDownloadFilename(title))}`);
+    res.setHeader("X-Skipped-Count", String(skippedCount));
+    res.end(buffer);
 });
 
 authRouter.get("/demo-accounts", requireAuth, requireRole(ROLES.ADMIN), (_req, res) => {

@@ -1,6 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../App";
 import { apiRequest } from "../lib/api";
+import { downloadPostFile } from "../lib/export";
+import { roleLabelMap, selectionStatusLabelMap } from "../lib/labels";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
@@ -55,13 +58,64 @@ type IssuedAccountRow = {
     studentNo?: string | null;
     studentName?: string | null;
     className?: string | null;
+    teacherClasses?: string | null;
+    teacherSubjects?: string | null;
+    latestIssuanceItemId?: number | null;
+    latestIssuanceBatchId?: number | null;
+    latestIssuanceAt?: string | null;
+    latestIssuanceTitle?: string | null;
+    canDownloadPassword?: boolean | number | null;
 };
+
+type IssuanceBatch = {
+    id: number;
+    batchType: string;
+    sourceModule: string;
+    title: string;
+    note?: string | null;
+    createdAt: string;
+    operatorName?: string | null;
+    totalCount: number;
+    downloadableCount: number;
+};
+
+type IssuanceBatchItem = {
+    id: number;
+    userId: number;
+    username: string;
+    displayName: string;
+    role: User["role"];
+    relatedName?: string | null;
+    studentNo?: string | null;
+    className?: string | null;
+    subjectName?: string | null;
+    canDownloadPassword: boolean | number;
+    invalidatedAt?: string | null;
+    invalidationReason?: string | null;
+    createdAt: string;
+};
+
+type IssuanceBatchDetail = {
+    batch: IssuanceBatch;
+    items: IssuanceBatchItem[];
+};
+
+const roleOrder: User["role"][] = ["student", "teacher", "head_teacher", "parent", "admin"];
 
 export const AccountPanel = () => {
     const { user, setUser } = useAuth();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [data, setData] = useState<AccountInfo | null>(null);
     const [issuedAccounts, setIssuedAccounts] = useState<IssuedAccountRow[]>([]);
-    const [resetFeedback, setResetFeedback] = useState("");
+    const [batches, setBatches] = useState<IssuanceBatch[]>([]);
+    const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
+    const [selectedBatchDetail, setSelectedBatchDetail] = useState<IssuanceBatchDetail | null>(null);
+    const [selectedAccountItemIds, setSelectedAccountItemIds] = useState<number[]>([]);
+    const [selectedBatchItemIds, setSelectedBatchItemIds] = useState<number[]>([]);
+    const [accountKeyword, setAccountKeyword] = useState("");
+    const [roleFilter, setRoleFilter] = useState<"all" | User["role"]>("all");
+    const [onlyPendingChange, setOnlyPendingChange] = useState(false);
+    const [onlyDownloadable, setOnlyDownloadable] = useState(false);
     const [profileForm, setProfileForm] = useState({
         displayName: "",
         phone: "",
@@ -74,24 +128,51 @@ export const AccountPanel = () => {
     });
     const [loading, setLoading] = useState(false);
     const [passwordLoading, setPasswordLoading] = useState(false);
+    const [batchDownloading, setBatchDownloading] = useState(false);
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
 
+    const canManageIssuedAccounts = ["admin", "teacher", "head_teacher"].includes(data?.user.role ?? user?.role ?? "");
+    const loginUrl = `${window.location.origin}/login`;
+
+    const loadBaseData = async () => {
+        const response = await apiRequest<AccountInfo>("/api/auth/me");
+        setData(response.data);
+        setProfileForm({
+            displayName: response.data.user.displayName,
+            phone: response.data.user.phone ?? "",
+            email: response.data.user.email ?? ""
+        });
+
+        if (["admin", "teacher", "head_teacher"].includes(user?.role ?? response.data.user.role)) {
+            const [issuedResponse, batchResponse] = await Promise.all([
+                apiRequest<IssuedAccountRow[]>("/api/auth/accounts"),
+                apiRequest<IssuanceBatch[]>("/api/auth/account-issuance-batches")
+            ]);
+            setIssuedAccounts(issuedResponse.data);
+            setBatches(batchResponse.data);
+
+            const routeBatchId = Number(searchParams.get("batchId") ?? "");
+            const nextBatchId = Number.isNaN(routeBatchId) || routeBatchId <= 0
+                ? batchResponse.data[0]?.id ?? null
+                : routeBatchId;
+            setSelectedBatchId(nextBatchId);
+        } else {
+            setIssuedAccounts([]);
+            setBatches([]);
+            setSelectedBatchId(null);
+        }
+    };
+
+    const loadBatchDetail = async (batchId: number) => {
+        const response = await apiRequest<IssuanceBatchDetail>(`/api/auth/account-issuance-batches/${batchId}`);
+        setSelectedBatchDetail(response.data);
+    };
+
     const load = async () => {
         try {
-            const response = await apiRequest<AccountInfo>("/api/auth/me");
-            setData(response.data);
-            if (["admin", "teacher", "head_teacher"].includes(user?.role ?? response.data.user.role)) {
-                const issuedResponse = await apiRequest<IssuedAccountRow[]>("/api/auth/accounts");
-                setIssuedAccounts(issuedResponse.data);
-            } else {
-                setIssuedAccounts([]);
-            }
-            setProfileForm({
-                displayName: response.data.user.displayName,
-                phone: response.data.user.phone ?? "",
-                email: response.data.user.email ?? ""
-            });
+            setError("");
+            await loadBaseData();
         } catch (err) {
             setError(err instanceof Error ? err.message : "加载账号信息失败");
         }
@@ -101,18 +182,132 @@ export const AccountPanel = () => {
         void load();
     }, []);
 
-    const roleLabel = useMemo(() => {
-        const role = data?.user.role;
-        const map: Record<string, string> = {
-            admin: "管理员",
-            teacher: "教师",
-            head_teacher: "班主任",
-            parent: "家长",
-            student: "学生"
-        };
+    useEffect(() => {
+        if (!selectedBatchId || !canManageIssuedAccounts) {
+            setSelectedBatchDetail(null);
+            return;
+        }
 
-        return role ? map[role] ?? role : "--";
+        void loadBatchDetail(selectedBatchId);
+    }, [selectedBatchId, canManageIssuedAccounts]);
+
+    useEffect(() => {
+        const routeBatchId = Number(searchParams.get("batchId") ?? "");
+        if (!Number.isNaN(routeBatchId) && routeBatchId > 0 && routeBatchId !== selectedBatchId) {
+            setSelectedBatchId(routeBatchId);
+        }
+    }, [searchParams, selectedBatchId]);
+
+    useEffect(() => {
+        setSelectedBatchItemIds([]);
+    }, [selectedBatchId]);
+
+    const filteredAccounts = useMemo(() => {
+        const keyword = accountKeyword.trim().toLowerCase();
+        return issuedAccounts
+            .filter((item) => {
+                if (roleFilter !== "all" && item.role !== roleFilter) {
+                    return false;
+                }
+                if (onlyPendingChange && !item.mustChangePassword) {
+                    return false;
+                }
+                if (onlyDownloadable && !Boolean(item.canDownloadPassword)) {
+                    return false;
+                }
+                if (!keyword) {
+                    return true;
+                }
+                return [
+                    item.username,
+                    item.displayName,
+                    item.studentName,
+                    item.studentNo,
+                    item.className,
+                    item.teacherClasses,
+                    item.teacherSubjects
+                ].some((value) => String(value ?? "").toLowerCase().includes(keyword));
+            })
+            .sort((left, right) => {
+                const leftRole = roleOrder.indexOf(left.role);
+                const rightRole = roleOrder.indexOf(right.role);
+                return leftRole - rightRole || right.id - left.id;
+            });
+    }, [accountKeyword, issuedAccounts, onlyDownloadable, onlyPendingChange, roleFilter]);
+
+    const selectedBatchDownloadableItems = useMemo(() => {
+        return (selectedBatchDetail?.items ?? []).filter((item) => Boolean(item.canDownloadPassword));
+    }, [selectedBatchDetail]);
+
+    const roleLabel = useMemo(() => {
+        return data?.user.role ? roleLabelMap[data.user.role] : "--";
     }, [data?.user.role]);
+
+    const relationText = (item: IssuedAccountRow): string => {
+        if (item.studentName) {
+            return `${item.studentName} / ${item.studentNo ?? "--"} / ${item.className ?? "--"}`;
+        }
+        if (item.teacherClasses) {
+            return `${item.teacherClasses}${item.teacherSubjects ? ` / ${item.teacherSubjects}` : ""}`;
+        }
+        return item.className ?? "--";
+    };
+
+    const downloadSelectedAccountPasswords = async () => {
+        if (selectedAccountItemIds.length === 0) {
+            return;
+        }
+
+        try {
+            setBatchDownloading(true);
+            const result = await downloadPostFile(
+                "/api/auth/account-issuance-items/download",
+                { itemIds: selectedAccountItemIds },
+                `选中未改密账号-${new Date().toISOString().slice(0, 10)}.xlsx`
+            );
+            setSuccess(result.skippedCount > 0 ? `下载完成，已自动跳过 ${result.skippedCount} 个已改密账号。` : "下载完成。");
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "下载账号密码失败");
+        } finally {
+            setBatchDownloading(false);
+        }
+    };
+
+    const downloadSelectedBatchItems = async () => {
+        if (selectedBatchItemIds.length === 0) {
+            return;
+        }
+
+        try {
+            setBatchDownloading(true);
+            const result = await downloadPostFile(
+                "/api/auth/account-issuance-items/download",
+                { itemIds: selectedBatchItemIds },
+                `${selectedBatchDetail?.batch.title ?? "账号发放批次"}.xlsx`
+            );
+            setSuccess(result.skippedCount > 0 ? `下载完成，已跳过 ${result.skippedCount} 个已改密账号。` : "下载完成。");
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "下载批次账号密码失败");
+        } finally {
+            setBatchDownloading(false);
+        }
+    };
+
+    const downloadWholeBatch = async (batchId: number, title: string) => {
+        try {
+            setBatchDownloading(true);
+            const result = await downloadPostFile(
+                `/api/auth/account-issuance-batches/${batchId}/download`,
+                {},
+                `${title}.xlsx`
+            );
+            setSuccess(result.skippedCount > 0 ? `批次下载完成，已跳过 ${result.skippedCount} 个已改密账号。` : "批次下载完成。");
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "下载批次账号失败");
+        } finally {
+            setBatchDownloading(false);
+        }
+    };
 
     const onSaveProfile = async (event: FormEvent) => {
         event.preventDefault();
@@ -120,24 +315,19 @@ export const AccountPanel = () => {
         setSuccess("");
         setLoading(true);
 
-        const payload = {
-            displayName: profileForm.displayName.trim(),
-            phone: profileForm.phone.trim(),
-            email: profileForm.email.trim()
-        };
-
         try {
-            const response = await apiRequest<{ token: string; user: User; profile: { phone?: string | null; email?: string | null } }>(
-                "/api/auth/me/profile",
-                {
-                    method: "PATCH",
-                    body: JSON.stringify(payload)
-                }
-            );
+            const response = await apiRequest<{ token: string; user: User }>("/api/auth/me/profile", {
+                method: "PATCH",
+                body: JSON.stringify({
+                    displayName: profileForm.displayName.trim(),
+                    phone: profileForm.phone.trim(),
+                    email: profileForm.email.trim()
+                })
+            });
 
             storage.setToken(response.data.token);
             setUser(response.data.user);
-            setSuccess("个人资料已更新");
+            setSuccess("个人资料已更新。");
             await load();
         } catch (err) {
             setError(err instanceof Error ? err.message : "更新资料失败");
@@ -169,7 +359,7 @@ export const AccountPanel = () => {
             storage.setToken(response.data.token);
             setUser(response.data.user);
             setPasswordForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
-            setSuccess("密码修改成功");
+            setSuccess("密码修改成功。系统已自动失效你名下可再次下载的历史一次性密码。");
             await load();
         } catch (err) {
             setError(err instanceof Error ? err.message : "密码修改失败");
@@ -182,10 +372,12 @@ export const AccountPanel = () => {
         <section className="panel-grid">
             <article className="panel-card wide">
                 <h3>我的账号</h3>
-                <p>角色: {roleLabel}</p>
-                <p>用户名: {data?.user.username ?? "--"}</p>
-                <p>创建时间: {data ? new Date(data.user.createdAt).toLocaleString() : "--"}</p>
-                {data?.user.mustChangePassword ? <p className="warning-box">当前账号为系统发放的初始密码，建议立即修改密码后再继续使用。</p> : null}
+                <p>角色：{roleLabel}</p>
+                <p>登录账号：{data?.user.username ?? "--"}</p>
+                <p>登录入口：{loginUrl}</p>
+                <p>首次登录提示：如当前使用的是系统发放的一次性密码，请先进入“修改密码”完成改密。</p>
+                <p>创建时间：{data ? new Date(data.user.createdAt).toLocaleString() : "--"}</p>
+                {data?.user.mustChangePassword ? <p className="warning-box">当前账号仍在使用系统发放的一次性密码，请先修改密码后再继续使用。</p> : null}
             </article>
 
             <article className="panel-card">
@@ -193,42 +385,15 @@ export const AccountPanel = () => {
                 <form className="form-stack" onSubmit={onSaveProfile}>
                     <label>
                         显示名
-                        <input
-                            value={profileForm.displayName}
-                            onChange={(event) =>
-                                setProfileForm((prev) => ({
-                                    ...prev,
-                                    displayName: event.target.value
-                                }))
-                            }
-                            required
-                        />
+                        <input value={profileForm.displayName} onChange={(event) => setProfileForm((prev) => ({ ...prev, displayName: event.target.value }))} required />
                     </label>
                     <label>
                         手机号
-                        <input
-                            value={profileForm.phone}
-                            onChange={(event) =>
-                                setProfileForm((prev) => ({
-                                    ...prev,
-                                    phone: event.target.value
-                                }))
-                            }
-                            placeholder="选填"
-                        />
+                        <input value={profileForm.phone} onChange={(event) => setProfileForm((prev) => ({ ...prev, phone: event.target.value }))} placeholder="选填" />
                     </label>
                     <label>
                         邮箱
-                        <input
-                            value={profileForm.email}
-                            onChange={(event) =>
-                                setProfileForm((prev) => ({
-                                    ...prev,
-                                    email: event.target.value
-                                }))
-                            }
-                            placeholder="选填"
-                        />
+                        <input value={profileForm.email} onChange={(event) => setProfileForm((prev) => ({ ...prev, email: event.target.value }))} placeholder="选填" />
                     </label>
                     <button className="primary-btn" type="submit" disabled={loading}>
                         {loading ? "保存中..." : "保存资料"}
@@ -241,47 +406,15 @@ export const AccountPanel = () => {
                 <form className="form-stack" onSubmit={onChangePassword}>
                     <label>
                         旧密码
-                        <input
-                            type="password"
-                            value={passwordForm.oldPassword}
-                            onChange={(event) =>
-                                setPasswordForm((prev) => ({
-                                    ...prev,
-                                    oldPassword: event.target.value
-                                }))
-                            }
-                            required
-                        />
+                        <input type="password" value={passwordForm.oldPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, oldPassword: event.target.value }))} required />
                     </label>
                     <label>
                         新密码
-                        <input
-                            type="password"
-                            value={passwordForm.newPassword}
-                            onChange={(event) =>
-                                setPasswordForm((prev) => ({
-                                    ...prev,
-                                    newPassword: event.target.value
-                                }))
-                            }
-                            minLength={8}
-                            required
-                        />
+                        <input type="password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))} minLength={8} required />
                     </label>
                     <label>
                         确认新密码
-                        <input
-                            type="password"
-                            value={passwordForm.confirmPassword}
-                            onChange={(event) =>
-                                setPasswordForm((prev) => ({
-                                    ...prev,
-                                    confirmPassword: event.target.value
-                                }))
-                            }
-                            minLength={8}
-                            required
-                        />
+                        <input type="password" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, confirmPassword: event.target.value }))} minLength={8} required />
                     </label>
                     <button className="secondary-btn" type="submit" disabled={passwordLoading}>
                         {passwordLoading ? "修改中..." : "修改密码"}
@@ -307,10 +440,10 @@ export const AccountPanel = () => {
                         </div>
                         <div className="role-item">
                             <span>选科状态</span>
-                            <strong>{data.roleProfile.student.selectionStatus}</strong>
+                            <strong>{selectionStatusLabelMap[data.roleProfile.student.selectionStatus] ?? data.roleProfile.student.selectionStatus}</strong>
                         </div>
                     </div>
-                    <p>当前组合: {data.roleProfile.student.subjectCombination ?? "暂无"}</p>
+                    <p>当前组合：{data.roleProfile.student.subjectCombination ?? "暂无"}</p>
                 </article>
             ) : null}
 
@@ -368,68 +501,264 @@ export const AccountPanel = () => {
                 </article>
             ) : null}
 
-            {["admin", "teacher", "head_teacher"].includes(data?.user.role ?? "") ? (
-                <article className="panel-card wide">
-                    <h4>账号发放台账</h4>
-                    <p className="muted-text">支持查看最近账号、重置一次性密码并重新发放。</p>
-                    {resetFeedback ? <p className="success-text">{resetFeedback}</p> : null}
-                    <div className="table-scroll">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>账号</th>
-                                    <th>姓名</th>
-                                    <th>角色</th>
-                                    <th>关联信息</th>
-                                    <th>状态</th>
-                                    <th>最近重置</th>
-                                    <th>操作</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {issuedAccounts.map((item) => (
-                                    <tr key={item.id}>
-                                        <td>{item.username}</td>
-                                        <td>{item.displayName}</td>
-                                        <td>{item.role}</td>
-                                        <td>{item.studentName ? `${item.studentName} / ${item.studentNo} / ${item.className ?? "--"}` : item.className ?? "--"}</td>
-                                        <td>{item.mustChangePassword ? "待改密" : "正常"}</td>
-                                        <td>{item.passwordResetAt ? new Date(item.passwordResetAt).toLocaleString() : "--"}</td>
-                                        <td>
-                                            <div className="account-actions">
-                                                <button
-                                                    type="button"
-                                                    className="secondary-btn"
-                                                    onClick={async () => {
-                                                        try {
-                                                            setError("");
-                                                            setSuccess("");
-                                                            setResetFeedback("");
-                                                            const response = await apiRequest<{
-                                                                username: string;
-                                                                temporaryPassword: string;
-                                                            }>(`/api/auth/accounts/${item.id}/reset-password`, {
-                                                                method: "POST"
-                                                            });
-                                                            setResetFeedback(
-                                                                `账号 ${response.data.username} 的一次性密码已重置为：${response.data.temporaryPassword}`
-                                                            );
-                                                            await load();
-                                                        } catch (err) {
-                                                            setError(err instanceof Error ? err.message : "重置密码失败");
-                                                        }
-                                                    }}
-                                                >
-                                                    重置密码
-                                                </button>
-                                            </div>
-                                        </td>
+            {canManageIssuedAccounts ? (
+                <>
+                    <article className="panel-card wide">
+                        <h4>账号发放台账</h4>
+                        <p>说明：登录账号就是登录页输入框里要填写的用户名；一次性密码只在“用户尚未改密”期间可再次下载。一旦用户自行改密，历史原密码会自动失效。</p>
+                        <p className="muted-text">如需再次发放密码，可直接“重置密码”，系统会自动生成新的发放批次。</p>
+
+                        <div className="inline-form section-actions">
+                            <label>
+                                搜索账号/姓名/班级
+                                <input value={accountKeyword} onChange={(event) => setAccountKeyword(event.target.value)} placeholder="输入账号、姓名、班级、学科" />
+                            </label>
+                            <label>
+                                身份
+                                <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as "all" | User["role"])}>
+                                    <option value="all">全部</option>
+                                    <option value="student">学生</option>
+                                    <option value="teacher">教师</option>
+                                    <option value="head_teacher">班主任</option>
+                                    <option value="parent">家长</option>
+                                    <option value="admin">管理员</option>
+                                </select>
+                            </label>
+                            <label className="toggle-label">
+                                <input type="checkbox" checked={onlyPendingChange} onChange={(event) => setOnlyPendingChange(event.target.checked)} />
+                                只看待改密账号
+                            </label>
+                            <label className="toggle-label">
+                                <input type="checkbox" checked={onlyDownloadable} onChange={(event) => setOnlyDownloadable(event.target.checked)} />
+                                只看仍可再次下载
+                            </label>
+                            <button className="primary-btn" type="button" disabled={selectedAccountItemIds.length === 0 || batchDownloading} onClick={() => void downloadSelectedAccountPasswords()}>
+                                {batchDownloading ? "下载中..." : `下载选中账号密码（${selectedAccountItemIds.length}）`}
+                            </button>
+                        </div>
+
+                        <div className="table-scroll">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th>登录账号</th>
+                                        <th>姓名</th>
+                                        <th>身份</th>
+                                        <th>关联信息</th>
+                                        <th>当前状态</th>
+                                        <th>仍可再次下载</th>
+                                        <th>最近发放</th>
+                                        <th>操作</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </article>
+                                </thead>
+                                <tbody>
+                                    {filteredAccounts.map((item) => (
+                                        <tr key={item.id}>
+                                            <td>
+                                                <input
+                                                    type="checkbox"
+                                                    disabled={!Boolean(item.canDownloadPassword) || !item.latestIssuanceItemId}
+                                                    checked={item.latestIssuanceItemId ? selectedAccountItemIds.includes(item.latestIssuanceItemId) : false}
+                                                    onChange={(event) => {
+                                                        if (!item.latestIssuanceItemId) {
+                                                            return;
+                                                        }
+                                                        setSelectedAccountItemIds((prev) =>
+                                                            event.target.checked
+                                                                ? [...prev, item.latestIssuanceItemId!]
+                                                                : prev.filter((targetId) => targetId !== item.latestIssuanceItemId)
+                                                        );
+                                                    }}
+                                                />
+                                            </td>
+                                            <td>{item.username}</td>
+                                            <td>{item.displayName}</td>
+                                            <td>{roleLabelMap[item.role]}</td>
+                                            <td>{relationText(item)}</td>
+                                            <td>{item.mustChangePassword ? "待修改初始密码" : "已完成改密"}</td>
+                                            <td>{item.canDownloadPassword ? "是" : "否"}</td>
+                                            <td>{item.latestIssuanceAt ? new Date(item.latestIssuanceAt).toLocaleString() : "--"}</td>
+                                            <td>
+                                                <div className="account-actions">
+                                                    {item.latestIssuanceBatchId ? (
+                                                        <button
+                                                            type="button"
+                                                            className="secondary-btn"
+                                                            onClick={() => {
+                                                                setSelectedBatchId(item.latestIssuanceBatchId ?? null);
+                                                                if (item.latestIssuanceBatchId) {
+                                                                    setSearchParams({ batchId: String(item.latestIssuanceBatchId) });
+                                                                }
+                                                            }}
+                                                        >
+                                                            查看批次
+                                                        </button>
+                                                    ) : null}
+                                                    <button
+                                                        type="button"
+                                                        className="secondary-btn"
+                                                        onClick={async () => {
+                                                            try {
+                                                                setError("");
+                                                                setSuccess("");
+                                                                const response = await apiRequest<{ issuanceBatchId: number | null; username: string }>(
+                                                                    `/api/auth/accounts/${item.id}/reset-password`,
+                                                                    { method: "POST" }
+                                                                );
+                                                                setSuccess(`已为账号 ${response.data.username} 生成新的重置批次，请到下方“账号发放批次记录”中下载新密码。`);
+                                                                await load();
+                                                                if (response.data.issuanceBatchId) {
+                                                                    setSelectedBatchId(response.data.issuanceBatchId);
+                                                                    setSearchParams({ batchId: String(response.data.issuanceBatchId) });
+                                                                }
+                                                            } catch (err) {
+                                                                setError(err instanceof Error ? err.message : "重置密码失败");
+                                                            }
+                                                        }}
+                                                    >
+                                                        重置密码
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {filteredAccounts.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={9} className="muted-text">当前筛选条件下暂无账号记录。</td>
+                                        </tr>
+                                    ) : null}
+                                </tbody>
+                            </table>
+                        </div>
+                    </article>
+
+                    <article className="panel-card wide">
+                        <h4>账号发放批次记录</h4>
+                        <p className="muted-text">学生导入、教师导入和人工重置密码都会生成批次记录。你可以按整批下载，也可以查看明细后只下载仍未改密的部分账号。</p>
+                        <div className="table-scroll">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>批次标题</th>
+                                        <th>时间</th>
+                                        <th>发起人</th>
+                                        <th>总账号数</th>
+                                        <th>仍可下载数</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {batches.map((item) => (
+                                        <tr key={item.id}>
+                                            <td>{item.title}</td>
+                                            <td>{new Date(item.createdAt).toLocaleString()}</td>
+                                            <td>{item.operatorName ?? "--"}</td>
+                                            <td>{item.totalCount}</td>
+                                            <td>{item.downloadableCount}</td>
+                                            <td>
+                                                <div className="account-actions">
+                                                    <button
+                                                        type="button"
+                                                        className="secondary-btn"
+                                                        onClick={() => {
+                                                            setSelectedBatchId(item.id);
+                                                            setSearchParams({ batchId: String(item.id) });
+                                                        }}
+                                                    >
+                                                        查看明细
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="secondary-btn"
+                                                        disabled={item.downloadableCount === 0 || batchDownloading}
+                                                        onClick={() => void downloadWholeBatch(item.id, item.title)}
+                                                    >
+                                                        下载本批未改密账号
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {batches.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="muted-text">当前暂无账号发放批次记录。</td>
+                                        </tr>
+                                    ) : null}
+                                </tbody>
+                            </table>
+                        </div>
+                    </article>
+
+                    {selectedBatchDetail ? (
+                        <article className="panel-card wide">
+                            <h4>批次明细：{selectedBatchDetail.batch.title}</h4>
+                            <p>
+                                发起时间：{new Date(selectedBatchDetail.batch.createdAt).toLocaleString()} · 发起人：{selectedBatchDetail.batch.operatorName ?? "--"} ·
+                                仍可下载：{selectedBatchDetail.batch.downloadableCount} / {selectedBatchDetail.batch.totalCount}
+                            </p>
+                            <div className="inline-form section-actions">
+                                <button
+                                    type="button"
+                                    className="primary-btn"
+                                    disabled={selectedBatchItemIds.length === 0 || batchDownloading}
+                                    onClick={() => void downloadSelectedBatchItems()}
+                                >
+                                    {batchDownloading ? "下载中..." : `下载勾选账号（${selectedBatchItemIds.length}）`}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary-btn"
+                                    disabled={selectedBatchDownloadableItems.length === 0 || batchDownloading}
+                                    onClick={() => {
+                                        setSelectedBatchItemIds(selectedBatchDownloadableItems.map((item) => item.id));
+                                    }}
+                                >
+                                    勾选全部未改密账号
+                                </button>
+                            </div>
+                            <div className="table-scroll">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th></th>
+                                            <th>登录账号</th>
+                                            <th>姓名</th>
+                                            <th>身份</th>
+                                            <th>关联信息</th>
+                                            <th>是否仍可下载</th>
+                                            <th>失效时间</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {selectedBatchDetail.items.map((item) => (
+                                            <tr key={item.id}>
+                                                <td>
+                                                    <input
+                                                        type="checkbox"
+                                                        disabled={!Boolean(item.canDownloadPassword)}
+                                                        checked={selectedBatchItemIds.includes(item.id)}
+                                                        onChange={(event) => {
+                                                            setSelectedBatchItemIds((prev) =>
+                                                                event.target.checked ? [...prev, item.id] : prev.filter((targetId) => targetId !== item.id)
+                                                            );
+                                                        }}
+                                                    />
+                                                </td>
+                                                <td>{item.username}</td>
+                                                <td>{item.displayName}</td>
+                                                <td>{roleLabelMap[item.role]}</td>
+                                                <td>{item.relatedName ?? "--"}</td>
+                                                <td>{item.canDownloadPassword ? "是" : "否（已改密）"}</td>
+                                                <td>{item.invalidatedAt ? new Date(item.invalidatedAt).toLocaleString() : "--"}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </article>
+                    ) : null}
+                </>
             ) : null}
 
             {error ? <p className="error-text">{error}</p> : null}

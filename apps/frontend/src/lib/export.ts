@@ -13,6 +13,15 @@ const buildRequestUrl = (path: string): string => {
     return `${normalizedBase}${normalizedPath}`;
 };
 
+const triggerBrowserDownload = (blob: Blob, filename: string): void => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+};
+
 export const downloadExport = async (
     endpoint: string,
     filenamePrefix: string,
@@ -36,12 +45,7 @@ export const downloadExport = async (
     }
 
     const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.${format}`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    triggerBrowserDownload(blob, `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.${format}`);
 };
 
 export const downloadFile = async (endpoint: string, fallbackFilename: string): Promise<void> => {
@@ -66,10 +70,44 @@ export const downloadFile = async (endpoint: string, fallbackFilename: string): 
     const filename = matched?.[1] ?? fallbackFilename;
 
     const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    triggerBrowserDownload(blob, filename);
+};
+
+export const downloadPostFile = async (
+    endpoint: string,
+    body: unknown,
+    fallbackFilename: string
+): Promise<{ skippedCount: number }> => {
+    const token = storage.getToken();
+    if (!token) {
+        throw new Error("请先登录");
+    }
+
+    const response = await fetch(buildRequestUrl(endpoint), {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+        const raw = await response.text();
+        try {
+            const parsed = JSON.parse(raw) as { message?: string };
+            throw new Error(parsed.message ?? "下载失败");
+        } catch {
+            throw new Error(raw || "下载失败");
+        }
+    }
+
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const matched = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^\"]+)"?/i);
+    const filename = decodeURIComponent(matched?.[1] ?? matched?.[2] ?? fallbackFilename);
+    const skippedCount = Number(response.headers.get("X-Skipped-Count") ?? "0");
+
+    const blob = await response.blob();
+    triggerBrowserDownload(blob, filename);
+    return { skippedCount };
 };

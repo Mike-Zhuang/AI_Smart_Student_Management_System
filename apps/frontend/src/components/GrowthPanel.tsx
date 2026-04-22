@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiRequest } from "../lib/api";
+import { riskLevelLabelMap } from "../lib/labels";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
@@ -94,19 +95,13 @@ export const GrowthPanel = ({ user }: { user: User }) => {
             return "--";
         }
 
-        const map: Record<string, string> = {
-            high: "高风险",
-            medium: "中风险",
-            low: "低风险"
-        };
-
-        return map[profile.profile.riskLevel] ?? profile.profile.riskLevel;
+        return riskLevelLabelMap[profile.profile.riskLevel] ?? profile.profile.riskLevel;
     }, [profile]);
 
     return (
         <section className="panel-grid">
             <article className="panel-card wide">
-                <h3>学生学业成长追踪</h3>
+                <h3>学生学业成长</h3>
                 <div className="inline-form">
                     <label>
                         选择学生
@@ -181,16 +176,20 @@ export const GrowthPanel = ({ user }: { user: User }) => {
 
             <article className="panel-card wide">
                 <h4>考试均分趋势</h4>
-                <div style={{ width: "100%", height: 280 }}>
-                    <ResponsiveContainer>
-                        <LineChart data={trends}>
-                            <XAxis dataKey="examName" />
-                            <YAxis domain={[40, 100]} />
-                            <Tooltip />
-                            <Line type="monotone" dataKey="avgScore" stroke="#c96442" strokeWidth={3} dot={{ r: 4 }} />
-                        </LineChart>
-                    </ResponsiveContainer>
-                </div>
+                {trends.length > 0 ? (
+                    <div style={{ width: "100%", height: 280 }}>
+                        <ResponsiveContainer>
+                            <LineChart data={trends}>
+                                <XAxis dataKey="examName" />
+                                <YAxis domain={[40, 100]} />
+                                <Tooltip />
+                                <Line type="monotone" dataKey="avgScore" stroke="#c96442" strokeWidth={3} dot={{ r: 4 }} />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                ) : (
+                    <p className="muted-text">暂无成绩数据，请先导入成绩。</p>
+                )}
             </article>
 
             {aiSummary ? (

@@ -28,16 +28,18 @@
 - 默认不再自动填充账号密码
 - 支持密码显示/隐藏切换
 - 不开放公开注册，账号由后台统一发放
+- 若是通过导入生成的新账号，可在“我的账号 → 账号发放台账”查看登录账号、历史批次与未改密账号的再次下载入口
 
-### 1.3 快速演示路径（建议）
+### 1.3 快速体验路径（建议）
 
-1. 总览看学生规模与系统状态
+1. 首页查看当前角色待办与学生规模
 2. 家校沟通发一条通知并查看回执
-3. 生涯选课生成一次推荐并看可解释面板
+3. 生涯发展与选科生成一次建议并查看可解释面板
 4. 学业成长查看趋势图与预警
-5. 教研管理新增任务并查看统计
-6. AI 助手中心用模板发起一次场景分析
-7. 导出审计日志或证据包
+5. 班级治理中心记录班级日志或小组积分
+6. 组织架构查看班级、班主任、科任教师与花名册
+7. AI 助手中心用模板发起一次场景分析
+8. 数据导入页面查看导入结果并演示批量删除
 
 ## 2. 角色说明
 
@@ -48,11 +50,11 @@
 
 ### 2.2 教师 teacher
 
-- 家校沟通、生涯选课、学业成长、教研管理、AI 助手中心
+- 家校沟通、生涯发展与选科、学业成长、组织架构、AI 助手中心
 
 ### 2.3 班主任 head_teacher
 
-- 教师权限 + 班主任工作台 + 更完整班级治理视图
+- 教师权限 + 班级治理中心 + 请假审批 + 更完整班级治理视图 + 组织架构
 
 ### 2.4 家长 parent
 
@@ -66,15 +68,15 @@
 
 左侧菜单默认包含：
 
-1. 总览
+1. 首页
 2. 家校沟通
-3. 生涯选课
+3. 生涯发展与选科
 4. 学业成长
-5. 班主任工作台（仅管理员/班主任）
-6. 教研管理（教师相关角色）
+5. 班级治理中心（仅管理员/班主任）
+6. 组织架构（管理员/班主任/教师）
 7. AI 助手中心
 8. 我的账号
-9. 数据导入（管理员/班主任）
+9. 数据导入（管理员/班主任/教师）
 
 页面行为说明：
 
@@ -84,13 +86,13 @@
 
 ## 4. 模块操作指南
 
-## 4.1 总览
+## 4.1 首页
 
 你会看到：
 
-- 当前角色与欢迎信息
-- 学生规模与关键统计
-- 管理员可见导出入口（审计/证据包）
+- 当前角色的欢迎信息与待办提示
+- 学生规模、请假待办与最近学生摘要
+- 管理员可见全校运行统计
 
 常用接口：
 
@@ -104,8 +106,9 @@
 1. 发送消息
 2. 查看消息列表
 3. 标记已读回执
-4. 查看或审批请假
+4. 按“学生填报 → 家长确认 → 班主任审批 → 返校销假”查看请假流程
 5. 导出消息与请假记录
+6. 班主任或管理员按需批量删除错误请假数据
 
 常用接口：
 
@@ -113,22 +116,26 @@
 - POST /api/home-school/messages
 - PATCH /api/home-school/messages/:id/read
 - GET /api/home-school/leave-requests
+- PATCH /api/home-school/leave-requests/:id/parent-confirm
 - PATCH /api/home-school/leave-requests/:id/review
+- PATCH /api/home-school/leave-requests/:id/complete
+- POST /api/home-school/leave-requests/batch-delete
 
-## 4.3 生涯选课
+## 4.3 生涯发展与选科
 
 推荐操作顺序：
 
 1. 选择学生
 2. 选择模型并填写 API Key
-3. 点击生成建议
+3. 补充自由背景信息并点击生成建议
 4. 查看推荐历史
 5. 查看可解释面板（维度分、证据链、反事实）
-6. 导出推荐记录
+6. 保存选科确认并导出推荐记录
 
 常用接口：
 
 - POST /api/career/recommendations/generate
+- POST /api/career/recommendations/generate-stream
 - GET /api/career/recommendations/:studentId
 - GET /api/career/public-data/major-requirements
 
@@ -148,38 +155,26 @@
 - GET /api/growth/students/:studentId/trends
 - GET /api/growth/students/:studentId/alerts
 
-## 4.5 教学教研管理
+## 4.5 班级治理中心
 
 推荐操作顺序：
 
-1. 新建任务（备课/教研/沟通/培训）
-2. 查看任务状态与截止时间
-3. 查看教研成果与绩效统计
-4. 导出任务记录用于评比材料
+1. 查看当前班级待办漏斗与重点关注学生
+2. 新增成长记录 / 班级日志
+3. 发布心灵驿站内容并支持附件上传与删除
+4. 记录小组积分并查看排行榜
+5. 上传班级风采照片或资料并维护班级简介
 
 常用接口：
 
-- GET /api/teaching/tasks
-- POST /api/teaching/tasks
-- GET /api/teaching/research
-- GET /api/teaching/analytics
+- GET /api/head-teacher/workbench
+- GET/PATCH /api/head-teacher/class-profile
+- GET/POST/DELETE /api/head-teacher/class-logs
+- GET/POST/DELETE /api/head-teacher/wellbeing-posts
+- GET/POST/DELETE /api/head-teacher/group-score-records
+- GET/POST/DELETE /api/head-teacher/gallery
 
-## 4.6 班主任工作台
-
-推荐操作顺序：
-
-1. 选择班级
-2. 查看待办漏斗（请假、预警、回执、任务）
-3. 查看风险学生清单
-4. 查看最近审计轨迹
-5. 导出证据包
-
-常用接口：
-
-- GET /api/teaching/head-teacher/workbench
-- GET /api/admin/export/evidence-report
-
-## 4.7 AI 助手中心
+## 4.6 AI 助手中心
 
 推荐操作顺序：
 
@@ -203,7 +198,7 @@
 - POST /api/ai/chat
 - POST /api/ai/chat-with-template
 
-## 4.8 数据导入
+## 4.7 数据导入
 
 建议先做小样本导入再全量导入。
 
@@ -214,7 +209,9 @@
 3. 在页面选择 XLSX / CSV 文件并点击“上传导入”
 4. 查看导入汇总（总行数、新增、更新、失败）
 5. 若系统自动发放了新账号，立即下载账号发放单
+6. 若本次错过下载，可跳转到“我的账号”查看本次发放批次并再次下载未改密账号
 6. 若存在失败行，按行号与字段提示修正后重传
+7. 若导入有误，可在同页批量删除学生、成绩或教师关系
 
 模板文件：
 
@@ -227,6 +224,11 @@
 - POST /api/data-import/students（`multipart/form-data`，字段名 `file`）
 - POST /api/data-import/exam-results（`multipart/form-data`，字段名 `file`）
 - POST /api/data-import/teachers（`multipart/form-data`，字段名 `file`）
+- GET /api/data-import/exam-results/manage
+- POST /api/data-import/exam-results/batch-delete
+- GET /api/data-import/teachers/manage
+- POST /api/data-import/teachers/batch-delete
+- POST /api/students/batch-delete
 
 说明：
 
@@ -234,17 +236,33 @@
 - 重复导入同一批数据会按业务键做更新，不会表现为“点了没反应”。
 - 系统兼容 UTF-8 / GBK / GB18030 CSV 与 XLSX。
 - 学生和教师导入会自动同步登录账号。
+- 学生、教师导入以及手动重置密码都会进入账号发放批次记录，便于后续追溯。
+- 已自行修改密码的账号会自动从再次下载名单中剔除，避免旧密码继续流转。
 
-## 5. 评比演示建议
+## 4.8 组织架构
 
-推荐在 8 分钟内演示以下闭环：
+适用角色：管理员、班主任、教师
 
-1. 登录并展示角色化导航
-2. 业务数据查询与 AI 辅助决策
-3. 管理动作（审批、任务、预警）
-4. 审计日志与证据导出
+你可以看到：
 
-详细脚本见 docs/defense-demo-script.md。
+- 全校班级总数、教师总数、班主任人数、学生总数
+- 按班级视图查看每个班的班主任、科任教师、学生花名册
+- 按教师视图查看某位老师所教的全部班级，以及是否兼任班主任
+
+推荐操作顺序：
+
+1. 先用“按班级看”核对某个班是否已配置班主任和科任学科
+2. 再切到“按教师看”确认老师是否跨多个班任教
+3. 若发现“待完善”，回到数据导入或班级治理补齐主数据
+
+## 5. 校内汇报建议
+
+推荐向学校汇报以下闭环：
+
+1. 登录并展示角色化导航与首页待办
+2. 家校通知与真实请假流转
+3. 选科建议的流式生成与可解释结果
+4. 班级治理内容维护与数据导入回滚
 
 ## 6. 常见问题与排障
 

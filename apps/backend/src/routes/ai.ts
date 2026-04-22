@@ -27,7 +27,7 @@ const chatSchema = z.object({
     enableThinking: z.boolean().optional(),
     responseFormat: z.enum(["text", "json_object"]).optional(),
     conversationId: z.number().int().positive().optional(),
-    scenario: z.enum(["career", "growth", "home-school", "teaching", "general"]).optional()
+    scenario: z.enum(["career", "growth", "home-school", "general"]).optional()
 });
 
 const templateChatSchema = z.object({
@@ -41,7 +41,7 @@ const templateChatSchema = z.object({
 
 const createConversationSchema = z.object({
     title: z.string().min(1).max(60).optional(),
-    scenario: z.enum(["career", "growth", "home-school", "teaching", "general"]).optional(),
+    scenario: z.enum(["career", "growth", "home-school", "general"]).optional(),
     model: z.string().min(3).optional()
 });
 

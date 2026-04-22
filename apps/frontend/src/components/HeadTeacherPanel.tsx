@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { downloadExport } from "../lib/export";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { riskLevelLabelMap } from "../lib/labels";
 
 type WorkbenchData = {
     className: string;
+    availableClasses: string[];
     todoFunnel: Array<{ stage: string; count: number }>;
     riskStudents: Array<{
         id: number;
@@ -13,12 +14,7 @@ type WorkbenchData = {
         summary: string;
         avgScore: number;
     }>;
-    receiptStats: {
-        totalMessages: number;
-        readMessages: number;
-        unreadMessages: number;
-        receiptRate: number;
-    };
+    scoreBoard: Array<{ groupName: string; totalScore: number }>;
     recentActions: Array<{
         id: number;
         actionModule: string;
@@ -29,18 +25,98 @@ type WorkbenchData = {
     }>;
 };
 
+type ClassProfileData = {
+    profile: {
+        className: string;
+        classMotto: string;
+        classStyle: string;
+        classSlogan: string;
+        courseSchedule: string;
+        classRules: string;
+        seatMap: string;
+        classCommittee: string;
+    } | null;
+    roster: Array<{ id: number; studentNo: string; name: string; grade: string; className: string }>;
+};
+
+type ClassLog = {
+    id: number;
+    className: string;
+    studentId?: number | null;
+    studentName?: string;
+    category: string;
+    title: string;
+    content: string;
+    recordDate: string;
+    createdAt: string;
+};
+
+type WellbeingPost = { id: number; className: string; title: string; content: string; attachmentName?: string | null; createdAt: string };
+type GroupScoreResponse = { records: Array<{ id: number; groupName: string; activityName: string; scoreDelta: number; note: string; createdAt: string }>; scoreBoard: Array<{ groupName: string; totalScore: number }> };
+type GalleryItem = { id: number; className: string; title: string; description: string; activityDate?: string | null; fileName?: string | null; createdAt: string };
+
 export const HeadTeacherPanel = () => {
     const [className, setClassName] = useState("");
-    const [data, setData] = useState<WorkbenchData | null>(null);
+    const [workbench, setWorkbench] = useState<WorkbenchData | null>(null);
+    const [profileData, setProfileData] = useState<ClassProfileData | null>(null);
+    const [logs, setLogs] = useState<ClassLog[]>([]);
+    const [selectedLogIds, setSelectedLogIds] = useState<number[]>([]);
+    const [wellbeingPosts, setWellbeingPosts] = useState<WellbeingPost[]>([]);
+    const [groupScores, setGroupScores] = useState<GroupScoreResponse | null>(null);
+    const [gallery, setGallery] = useState<GalleryItem[]>([]);
+    const [wellbeingFile, setWellbeingFile] = useState<File | null>(null);
+    const [galleryFile, setGalleryFile] = useState<File | null>(null);
     const [error, setError] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [profileForm, setProfileForm] = useState({
+        classMotto: "",
+        classStyle: "",
+        classSlogan: "",
+        courseSchedule: "",
+        classRules: "",
+        seatMap: "",
+        classCommittee: ""
+    });
+    const [logForm, setLogForm] = useState({ studentName: "", category: "班级日常", title: "", content: "", recordDate: new Date().toISOString().slice(0, 10) });
+    const [wellbeingForm, setWellbeingForm] = useState({ title: "", content: "" });
+    const [groupForm, setGroupForm] = useState({ groupName: "", activityName: "", scoreDelta: 1, note: "" });
+    const [galleryForm, setGalleryForm] = useState({ title: "", description: "", activityDate: new Date().toISOString().slice(0, 10) });
 
-    const load = async () => {
+    const load = async (targetClass?: string) => {
         try {
-            const query = className ? `?className=${encodeURIComponent(className)}` : "";
-            const response = await apiRequest<WorkbenchData>(`/api/teaching/head-teacher/workbench${query}`);
-            setData(response.data);
+            const queryClass = targetClass ?? className;
+            const query = queryClass ? `?className=${encodeURIComponent(queryClass)}` : "";
+            const workbenchResp = await apiRequest<WorkbenchData>(`/api/head-teacher/workbench${query}`);
+            const resolvedClassName = workbenchResp.data.className;
+            setWorkbench(workbenchResp.data);
+            setClassName(resolvedClassName);
+
+            const [profileResp, logResp, wellbeingResp, scoreResp, galleryResp] = await Promise.all([
+                apiRequest<ClassProfileData>(`/api/head-teacher/class-profile?className=${encodeURIComponent(resolvedClassName)}`),
+                apiRequest<ClassLog[]>(`/api/head-teacher/class-logs?className=${encodeURIComponent(resolvedClassName)}`),
+                apiRequest<WellbeingPost[]>(`/api/head-teacher/wellbeing-posts?className=${encodeURIComponent(resolvedClassName)}`),
+                apiRequest<GroupScoreResponse>(`/api/head-teacher/group-score-records?className=${encodeURIComponent(resolvedClassName)}`),
+                apiRequest<GalleryItem[]>(`/api/head-teacher/gallery?className=${encodeURIComponent(resolvedClassName)}`)
+            ]);
+
+            setProfileData(profileResp.data);
+            setLogs(logResp.data);
+            setWellbeingPosts(wellbeingResp.data);
+            setGroupScores(scoreResp.data);
+            setGallery(galleryResp.data);
+            if (profileResp.data.profile) {
+                setProfileForm({
+                    classMotto: profileResp.data.profile.classMotto ?? "",
+                    classStyle: profileResp.data.profile.classStyle ?? "",
+                    classSlogan: profileResp.data.profile.classSlogan ?? "",
+                    courseSchedule: profileResp.data.profile.courseSchedule ?? "",
+                    classRules: profileResp.data.profile.classRules ?? "",
+                    seatMap: profileResp.data.profile.seatMap ?? "",
+                    classCommittee: profileResp.data.profile.classCommittee ?? ""
+                });
+            }
         } catch (err) {
-            setError(err instanceof Error ? err.message : "加载失败");
+            setError(err instanceof Error ? err.message : "加载班级治理数据失败");
         }
     };
 
@@ -49,11 +125,7 @@ export const HeadTeacherPanel = () => {
     }, []);
 
     const riskSummary = useMemo(() => {
-        if (!data) {
-            return { high: 0, medium: 0 };
-        }
-
-        return data.riskStudents.reduce(
+        return (workbench?.riskStudents ?? []).reduce(
             (acc, cur) => {
                 if (cur.riskLevel === "high") acc.high += 1;
                 if (cur.riskLevel === "medium") acc.medium += 1;
@@ -61,37 +133,46 @@ export const HeadTeacherPanel = () => {
             },
             { high: 0, medium: 0 }
         );
-    }, [data]);
+    }, [workbench?.riskStudents]);
+
+    const onSaveProfile = async (event: FormEvent) => {
+        event.preventDefault();
+        setSaving(true);
+        setError("");
+        try {
+            await apiRequest("/api/head-teacher/class-profile", {
+                method: "PATCH",
+                body: JSON.stringify({ className, ...profileForm })
+            });
+            await load(className);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "保存班级简介失败");
+        } finally {
+            setSaving(false);
+        }
+    };
 
     return (
         <section className="panel-grid">
             <article className="panel-card wide">
-                <h3>班主任工作台（细颗粒）</h3>
+                <h3>班级治理中心</h3>
                 <div className="inline-form">
                     <label>
-                        班级筛选
-                        <input
-                            placeholder="例如：高二(1)班"
-                            value={className}
-                            onChange={(event) => setClassName(event.target.value)}
-                        />
+                        班级
+                        <select value={className} onChange={(event) => setClassName(event.target.value)}>
+                            {(workbench?.availableClasses ?? []).map((item) => (
+                                <option key={item} value={item}>{item}</option>
+                            ))}
+                        </select>
                     </label>
-                    <button className="primary-btn" onClick={() => void load()}>
-                        刷新数据
-                    </button>
-                    <button
-                        className="secondary-btn"
-                        onClick={() => void downloadExport("/api/admin/export/evidence-report", "evidence-report", "json")}
-                    >
-                        导出评比汇总
-                    </button>
+                    <button className="primary-btn" onClick={() => void load(className)}>刷新班级数据</button>
                 </div>
             </article>
 
             <article className="panel-card">
-                <h4>待办漏斗</h4>
+                <h4>当前待办</h4>
                 <div className="funnel-list">
-                    {data?.todoFunnel.map((item) => (
+                    {workbench?.todoFunnel.map((item) => (
                         <div className="funnel-item" key={item.stage}>
                             <span>{item.stage}</span>
                             <strong>{item.count}</strong>
@@ -101,37 +182,116 @@ export const HeadTeacherPanel = () => {
             </article>
 
             <article className="panel-card">
-                <h4>家校回执统计</h4>
-                <p>总消息: {data?.receiptStats.totalMessages ?? 0}</p>
-                <p>已读: {data?.receiptStats.readMessages ?? 0}</p>
-                <p>未读: {data?.receiptStats.unreadMessages ?? 0}</p>
-                <p>回执率: {Math.round((data?.receiptStats.receiptRate ?? 0) * 100)}%</p>
+                <h4>重点关注学生</h4>
+                <p>高风险 {riskSummary.high} 人 · 中风险 {riskSummary.medium} 人</p>
+                <div className="list-box compact">
+                    {(workbench?.riskStudents ?? []).slice(0, 4).map((item) => (
+                        <div className="list-item" key={item.id}>
+                            <strong>{item.name}</strong>
+                            <p>{riskLevelLabelMap[item.riskLevel]} · 均分 {item.avgScore}</p>
+                            <small>{item.summary}</small>
+                        </div>
+                    ))}
+                </div>
+            </article>
+
+            <article className="panel-card">
+                <h4>小组评比榜</h4>
+                <div className="list-box compact">
+                    {(groupScores?.scoreBoard ?? []).map((item) => (
+                        <div className="list-item" key={item.groupName}>
+                            <strong>{item.groupName}</strong>
+                            <p>累计积分：{item.totalScore}</p>
+                        </div>
+                    ))}
+                </div>
             </article>
 
             <article className="panel-card wide">
-                <h4>风险学生清单</h4>
-                <p>
-                    高风险 {riskSummary.high} 人 · 中风险 {riskSummary.medium} 人
-                </p>
+                <h4>成长记录 / 班级日志</h4>
+                <form className="inline-form" onSubmit={async (event) => {
+                    event.preventDefault();
+                    try {
+                        await apiRequest("/api/head-teacher/class-logs", {
+                            method: "POST",
+                            body: JSON.stringify({ className, ...logForm })
+                        });
+                        setLogForm({ studentName: "", category: "班级日常", title: "", content: "", recordDate: new Date().toISOString().slice(0, 10) });
+                        await load(className);
+                    } catch (err) {
+                        setError(err instanceof Error ? err.message : "新增班级日志失败");
+                    }
+                }}>
+                    <label>
+                        学生姓名
+                        <input value={logForm.studentName} onChange={(event) => setLogForm((prev) => ({ ...prev, studentName: event.target.value }))} placeholder="可选" />
+                    </label>
+                    <label>
+                        分类
+                        <input value={logForm.category} onChange={(event) => setLogForm((prev) => ({ ...prev, category: event.target.value }))} />
+                    </label>
+                    <label>
+                        标题
+                        <input value={logForm.title} onChange={(event) => setLogForm((prev) => ({ ...prev, title: event.target.value }))} required />
+                    </label>
+                    <label>
+                        日期
+                        <input type="date" value={logForm.recordDate} onChange={(event) => setLogForm((prev) => ({ ...prev, recordDate: event.target.value }))} required />
+                    </label>
+                    <label className="wide-field">
+                        内容
+                        <textarea rows={3} value={logForm.content} onChange={(event) => setLogForm((prev) => ({ ...prev, content: event.target.value }))} required />
+                    </label>
+                    <button className="primary-btn" type="submit">新增日志</button>
+                    <button
+                        className="secondary-btn"
+                        type="button"
+                        disabled={selectedLogIds.length === 0}
+                        onClick={async () => {
+                            try {
+                                await apiRequest("/api/head-teacher/class-logs/batch-delete", {
+                                    method: "POST",
+                                    body: JSON.stringify({ ids: selectedLogIds })
+                                });
+                                setSelectedLogIds([]);
+                                await load(className);
+                            } catch (err) {
+                                setError(err instanceof Error ? err.message : "批量删除班级日志失败");
+                            }
+                        }}
+                    >
+                        批量删除日志
+                    </button>
+                </form>
                 <div className="table-scroll">
                     <table>
                         <thead>
                             <tr>
-                                <th>姓名</th>
-                                <th>班级</th>
-                                <th>风险等级</th>
-                                <th>均分</th>
-                                <th>触发摘要</th>
+                                <th></th>
+                                <th>日期</th>
+                                <th>分类</th>
+                                <th>标题</th>
+                                <th>学生</th>
+                                <th>内容</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {data?.riskStudents.map((item) => (
+                            {logs.map((item) => (
                                 <tr key={item.id}>
-                                    <td>{item.name}</td>
-                                    <td>{item.className}</td>
-                                    <td>{item.riskLevel}</td>
-                                    <td>{item.avgScore}</td>
-                                    <td>{item.summary}</td>
+                                    <td>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedLogIds.includes(item.id)}
+                                            onChange={(event) => {
+                                                setSelectedLogIds((prev) => event.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id));
+                                            }}
+                                        />
+                                    </td>
+                                    <td>{item.recordDate}</td>
+                                    <td>{item.category}</td>
+                                    <td>{item.title}</td>
+                                    <td>{item.studentName || "--"}</td>
+                                    <td>{item.content}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -140,14 +300,258 @@ export const HeadTeacherPanel = () => {
             </article>
 
             <article className="panel-card wide">
-                <h4>最近操作轨迹（审计）</h4>
+                <h4>心灵驿站</h4>
+                <form className="inline-form" onSubmit={async (event) => {
+                    event.preventDefault();
+                    try {
+                        const formData = new FormData();
+                        formData.append("className", className);
+                        formData.append("title", wellbeingForm.title);
+                        formData.append("content", wellbeingForm.content);
+                        if (wellbeingFile) {
+                            formData.append("file", wellbeingFile);
+                        }
+                        await apiRequest("/api/head-teacher/wellbeing-posts", { method: "POST", body: formData });
+                        setWellbeingForm({ title: "", content: "" });
+                        setWellbeingFile(null);
+                        await load(className);
+                    } catch (err) {
+                        setError(err instanceof Error ? err.message : "发布心灵驿站失败");
+                    }
+                }}>
+                    <label>
+                        标题
+                        <input value={wellbeingForm.title} onChange={(event) => setWellbeingForm((prev) => ({ ...prev, title: event.target.value }))} required />
+                    </label>
+                    <label className="wide-field">
+                        正文
+                        <textarea rows={3} value={wellbeingForm.content} onChange={(event) => setWellbeingForm((prev) => ({ ...prev, content: event.target.value }))} required />
+                    </label>
+                    <label>
+                        附件（可选）
+                        <input type="file" onChange={(event) => setWellbeingFile(event.target.files?.[0] ?? null)} />
+                    </label>
+                    <button className="primary-btn" type="submit">发布内容</button>
+                </form>
                 <div className="list-box compact">
-                    {data?.recentActions.map((item) => (
+                    {wellbeingPosts.map((item) => (
+                        <div className="list-item" key={item.id}>
+                            <strong>{item.title}</strong>
+                            <p>{item.content}</p>
+                            <div className="list-item-actions">
+                                {item.attachmentName ? <small>附件：{item.attachmentName}</small> : null}
+                                <small>{new Date(item.createdAt).toLocaleString()}</small>
+                                <button className="secondary-btn" type="button" onClick={async () => {
+                                    try {
+                                        await apiRequest(`/api/head-teacher/wellbeing-posts/${item.id}`, { method: "DELETE" });
+                                        await load(className);
+                                    } catch (err) {
+                                        setError(err instanceof Error ? err.message : "删除心灵驿站内容失败");
+                                    }
+                                }}>删除</button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </article>
+
+            <article className="panel-card wide">
+                <h4>小组评比</h4>
+                <form className="inline-form" onSubmit={async (event) => {
+                    event.preventDefault();
+                    try {
+                        await apiRequest("/api/head-teacher/group-score-records", {
+                            method: "POST",
+                            body: JSON.stringify({ className, ...groupForm, scoreDelta: Number(groupForm.scoreDelta) })
+                        });
+                        setGroupForm({ groupName: "", activityName: "", scoreDelta: 1, note: "" });
+                        await load(className);
+                    } catch (err) {
+                        setError(err instanceof Error ? err.message : "新增积分记录失败");
+                    }
+                }}>
+                    <label>
+                        小组名称
+                        <input value={groupForm.groupName} onChange={(event) => setGroupForm((prev) => ({ ...prev, groupName: event.target.value }))} required />
+                    </label>
+                    <label>
+                        活动项目
+                        <input value={groupForm.activityName} onChange={(event) => setGroupForm((prev) => ({ ...prev, activityName: event.target.value }))} required />
+                    </label>
+                    <label>
+                        积分变化
+                        <input type="number" value={groupForm.scoreDelta} onChange={(event) => setGroupForm((prev) => ({ ...prev, scoreDelta: Number(event.target.value) }))} required />
+                    </label>
+                    <label className="wide-field">
+                        备注
+                        <input value={groupForm.note} onChange={(event) => setGroupForm((prev) => ({ ...prev, note: event.target.value }))} />
+                    </label>
+                    <button className="primary-btn" type="submit">记录积分</button>
+                </form>
+                <div className="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>小组</th>
+                                <th>活动</th>
+                                <th>积分</th>
+                                <th>备注</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(groupScores?.records ?? []).map((item) => (
+                                <tr key={item.id}>
+                                    <td>{item.groupName}</td>
+                                    <td>{item.activityName}</td>
+                                    <td>{item.scoreDelta}</td>
+                                    <td>{item.note}</td>
+                                    <td>
+                                        <button className="secondary-btn" type="button" onClick={async () => {
+                                            try {
+                                                await apiRequest(`/api/head-teacher/group-score-records/${item.id}`, { method: "DELETE" });
+                                                await load(className);
+                                            } catch (err) {
+                                                setError(err instanceof Error ? err.message : "删除积分记录失败");
+                                            }
+                                        }}>删除</button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article className="panel-card wide">
+                <h4>班级风采</h4>
+                <form className="inline-form" onSubmit={async (event) => {
+                    event.preventDefault();
+                    try {
+                        const formData = new FormData();
+                        formData.append("className", className);
+                        formData.append("title", galleryForm.title);
+                        formData.append("description", galleryForm.description);
+                        formData.append("activityDate", galleryForm.activityDate);
+                        if (galleryFile) {
+                            formData.append("file", galleryFile);
+                        }
+                        await apiRequest("/api/head-teacher/gallery", { method: "POST", body: formData });
+                        setGalleryForm({ title: "", description: "", activityDate: new Date().toISOString().slice(0, 10) });
+                        setGalleryFile(null);
+                        await load(className);
+                    } catch (err) {
+                        setError(err instanceof Error ? err.message : "新增班级风采失败");
+                    }
+                }}>
+                    <label>
+                        标题
+                        <input value={galleryForm.title} onChange={(event) => setGalleryForm((prev) => ({ ...prev, title: event.target.value }))} required />
+                    </label>
+                    <label>
+                        活动日期
+                        <input type="date" value={galleryForm.activityDate} onChange={(event) => setGalleryForm((prev) => ({ ...prev, activityDate: event.target.value }))} />
+                    </label>
+                    <label className="wide-field">
+                        说明
+                        <textarea rows={3} value={galleryForm.description} onChange={(event) => setGalleryForm((prev) => ({ ...prev, description: event.target.value }))} />
+                    </label>
+                    <label>
+                        照片或附件（可选）
+                        <input type="file" accept="image/*,.pdf,.doc,.docx" onChange={(event) => setGalleryFile(event.target.files?.[0] ?? null)} />
+                    </label>
+                    <button className="primary-btn" type="submit">新增风采</button>
+                </form>
+                <div className="list-box compact">
+                    {gallery.map((item) => (
+                        <div className="list-item" key={item.id}>
+                            <strong>{item.title}</strong>
+                            <p>{item.description || "暂无说明"}</p>
+                            <div className="list-item-actions">
+                                {item.fileName ? <small>文件：{item.fileName}</small> : null}
+                                <small>{item.activityDate || "--"}</small>
+                                <button className="secondary-btn" type="button" onClick={async () => {
+                                    try {
+                                        await apiRequest(`/api/head-teacher/gallery/${item.id}`, { method: "DELETE" });
+                                        await load(className);
+                                    } catch (err) {
+                                        setError(err instanceof Error ? err.message : "删除班级风采失败");
+                                    }
+                                }}>删除</button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </article>
+
+            <article className="panel-card wide">
+                <h4>班级简介</h4>
+                <form className="form-stack" onSubmit={onSaveProfile}>
+                    <div className="inline-form">
+                        <label>
+                            班风
+                            <input value={profileForm.classStyle} onChange={(event) => setProfileForm((prev) => ({ ...prev, classStyle: event.target.value }))} />
+                        </label>
+                        <label>
+                            班训
+                            <input value={profileForm.classMotto} onChange={(event) => setProfileForm((prev) => ({ ...prev, classMotto: event.target.value }))} />
+                        </label>
+                        <label>
+                            口号
+                            <input value={profileForm.classSlogan} onChange={(event) => setProfileForm((prev) => ({ ...prev, classSlogan: event.target.value }))} />
+                        </label>
+                    </div>
+                    <label>
+                        课程表
+                        <textarea rows={3} value={profileForm.courseSchedule} onChange={(event) => setProfileForm((prev) => ({ ...prev, courseSchedule: event.target.value }))} />
+                    </label>
+                    <label>
+                        班级公约
+                        <textarea rows={3} value={profileForm.classRules} onChange={(event) => setProfileForm((prev) => ({ ...prev, classRules: event.target.value }))} />
+                    </label>
+                    <label>
+                        座位表
+                        <textarea rows={3} value={profileForm.seatMap} onChange={(event) => setProfileForm((prev) => ({ ...prev, seatMap: event.target.value }))} />
+                    </label>
+                    <label>
+                        班委会
+                        <textarea rows={3} value={profileForm.classCommittee} onChange={(event) => setProfileForm((prev) => ({ ...prev, classCommittee: event.target.value }))} />
+                    </label>
+                    <button className="primary-btn" type="submit" disabled={saving}>{saving ? "保存中..." : "保存班级简介"}</button>
+                </form>
+
+                <h5>班级花名册</h5>
+                <div className="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>学号</th>
+                                <th>姓名</th>
+                                <th>年级</th>
+                                <th>班级</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(profileData?.roster ?? []).map((item) => (
+                                <tr key={item.id}>
+                                    <td>{item.studentNo}</td>
+                                    <td>{item.name}</td>
+                                    <td>{item.grade}</td>
+                                    <td>{item.className}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article className="panel-card wide">
+                <h4>最近操作轨迹</h4>
+                <div className="list-box compact">
+                    {(workbench?.recentActions ?? []).map((item) => (
                         <div className="list-item" key={item.id}>
                             <strong>{item.actionModule}</strong>
-                            <p>
-                                {item.operatorName} 执行 {item.actionType} ({item.objectType})
-                            </p>
+                            <p>{item.operatorName} 执行了 {item.actionType}</p>
                             <small>{new Date(item.createdAt).toLocaleString()}</small>
                         </div>
                     ))}

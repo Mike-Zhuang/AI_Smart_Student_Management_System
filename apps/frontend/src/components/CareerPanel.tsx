@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiRequest } from "../lib/api";
+import { apiRequest, resolveApiUrl } from "../lib/api";
 import { downloadExport } from "../lib/export";
+import { selectionStatusLabelMap } from "../lib/labels";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 
@@ -55,20 +56,43 @@ type SubjectRules = {
     };
 };
 
+type ModelItem = {
+    id: string;
+    name: string;
+    description: string;
+    multimodal: boolean;
+    thinking: boolean;
+    supportsJsonMode: boolean;
+    pricingTier: "free" | "paid";
+    isDefault: boolean;
+};
+
+type StreamCompletePayload = {
+    result: {
+        selectedCombination: string;
+        reasoning: string;
+        majorSuggestions: string[];
+        scoreBreakdown: ScoreBreakdown;
+    };
+};
+
 export const CareerPanel = ({ user }: { user: User }) => {
     const navigate = useNavigate();
     const [students, setStudents] = useState<Student[]>([]);
     const [studentId, setStudentId] = useState<number | null>(null);
     const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
     const [majors, setMajors] = useState<MajorRow[]>([]);
+    const [models, setModels] = useState<ModelItem[]>([]);
     const [model, setModel] = useState("glm-4.7-flash");
     const [apiKey, setApiKey] = useState(storage.getApiKey());
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
     const [selectionSaving, setSelectionSaving] = useState(false);
     const [rules, setRules] = useState<SubjectRules | null>(null);
+    const [streamingAnswer, setStreamingAnswer] = useState("");
+    const [supplementalContext, setSupplementalContext] = useState("");
     const [selectionForm, setSelectionForm] = useState({
-        academicStage: "高一下",
+        academicStage: "高一上",
         firstSelectedSubject: "",
         secondSelectedSubject: "",
         thirdSelectedSubject: ""
@@ -99,16 +123,6 @@ export const CareerPanel = ({ user }: { user: User }) => {
         }
     };
 
-    const loadMajors = async () => {
-        const response = await apiRequest<MajorRow[]>("/api/career/public-data/major-requirements");
-        setMajors(response.data);
-    };
-
-    const loadRules = async () => {
-        const response = await apiRequest<SubjectRules>("/api/students/subject-rules");
-        setRules(response.data);
-    };
-
     const loadRecommendations = async (targetId: number) => {
         const response = await apiRequest<Recommendation[]>(`/api/career/recommendations/${targetId}`);
         setRecommendations(response.data);
@@ -117,33 +131,43 @@ export const CareerPanel = ({ user }: { user: User }) => {
     useEffect(() => {
         const load = async () => {
             try {
-                await Promise.all([loadStudents(), loadMajors()]);
-                await loadRules();
+                const [studentResp, majorResp, ruleResp, modelResp] = await Promise.all([
+                    apiRequest<Student[]>("/api/students"),
+                    apiRequest<MajorRow[]>("/api/career/public-data/major-requirements"),
+                    apiRequest<SubjectRules>("/api/students/subject-rules"),
+                    apiRequest<ModelItem[]>("/api/ai/models")
+                ]);
+                const ordered = [...studentResp.data].sort((a, b) => b.id - a.id);
+                setStudents(ordered);
+                setMajors(majorResp.data);
+                setRules(ruleResp.data);
+                const textModels = modelResp.data.filter((item) => item.supportsJsonMode);
+                setModels(textModels);
+                setModel(textModels.find((item) => item.isDefault)?.id ?? textModels[0]?.id ?? "glm-4.7-flash");
+                if (ordered.length > 0) {
+                    setStudentId(ordered[0].id);
+                }
             } catch (err) {
-                setError(err instanceof Error ? err.message : "加载失败");
+                setError(err instanceof Error ? err.message : "加载选科页面失败");
             }
         };
         void load();
     }, []);
 
     useEffect(() => {
-        if (!studentId) {
-            return;
+        if (studentId) {
+            void loadRecommendations(studentId);
         }
-
-        void loadRecommendations(studentId);
     }, [studentId]);
 
     useEffect(() => {
         if (!studentId) {
             return;
         }
-
         const student = students.find((item) => item.id === studentId);
         if (!student) {
             return;
         }
-
         setSelectionForm({
             academicStage: student.academicStage,
             firstSelectedSubject: student.firstSelectedSubject ?? "",
@@ -152,63 +176,102 @@ export const CareerPanel = ({ user }: { user: User }) => {
         });
     }, [studentId, students]);
 
-    const canEditSelection = user.role === "admin" || user.role === "teacher" || user.role === "head_teacher" || user.role === "student";
-
     const selectedStudent = students.find((item) => item.id === studentId);
-    const stageOptions = selectedStudent && rules
-        ? rules.rules.stageByGrade[selectedStudent.grade] ?? rules.academicStages
-        : rules?.academicStages ?? ["高一上", "高一下", "高二", "高三"];
+    const stageOptions = selectedStudent && rules ? rules.rules.stageByGrade[selectedStudent.grade] ?? rules.academicStages : rules?.academicStages ?? [];
 
     const saveSelection = async () => {
         if (!studentId) {
             return;
         }
-
-        setError("");
         setSelectionSaving(true);
+        setError("");
         try {
             await apiRequest(`/api/students/${studentId}/subject-selection`, {
                 method: "PATCH",
-                body: JSON.stringify({
-                    academicStage: selectionForm.academicStage,
-                    firstSelectedSubject: selectionForm.academicStage === "高一上" ? null : selectionForm.firstSelectedSubject,
-                    secondSelectedSubject: selectionForm.academicStage === "高一上" ? null : selectionForm.secondSelectedSubject,
-                    thirdSelectedSubject: selectionForm.academicStage === "高一上" ? null : selectionForm.thirdSelectedSubject
-                })
+                body: JSON.stringify(selectionForm)
             });
-
             await loadStudents();
-            if (studentId) {
-                await loadRecommendations(studentId);
-            }
         } catch (err) {
-            setError(err instanceof Error ? err.message : "保存选课失败");
+            setError(err instanceof Error ? err.message : "保存选科失败");
         } finally {
             setSelectionSaving(false);
         }
+    };
+
+    const consumeStream = async (payload: unknown): Promise<StreamCompletePayload> => {
+        const token = storage.getToken();
+        const response = await fetch(resolveApiUrl("/api/career/recommendations/generate-stream"), {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok || !response.body) {
+            const raw = await response.text();
+            throw new Error(raw || "流式生成失败");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let complete: StreamCompletePayload | null = null;
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let sep = buffer.indexOf("\n\n");
+            while (sep !== -1) {
+                const block = buffer.slice(0, sep);
+                buffer = buffer.slice(sep + 2);
+                const eventLine = block.split(/\r?\n/).find((line) => line.startsWith("event:"));
+                const dataLine = block.split(/\r?\n/).find((line) => line.startsWith("data:"));
+                if (eventLine && dataLine) {
+                    const event = eventLine.slice(6).trim();
+                    const parsed = JSON.parse(dataLine.slice(5).trim()) as Record<string, unknown>;
+                    if (event === "delta" && typeof parsed.delta === "string") {
+                        setStreamingAnswer((prev) => prev + parsed.delta);
+                    }
+                    if (event === "error") {
+                        throw new Error(String(parsed.message ?? "生成失败"));
+                    }
+                    if (event === "complete") {
+                        complete = parsed as unknown as StreamCompletePayload;
+                    }
+                }
+                sep = buffer.indexOf("\n\n");
+            }
+        }
+        if (!complete) {
+            throw new Error("未收到选科建议完成事件");
+        }
+        return complete;
     };
 
     const generate = async () => {
         if (!studentId) {
             return;
         }
-
         if (!apiKey.trim()) {
-            setError("生涯推荐已改为真实 AI 调用，请先填写 API Key");
+            setError("请先填写可用的智谱 API Key");
             return;
         }
-
-        setError("");
         setLoading(true);
+        setStreamingAnswer("");
+        setError("");
         try {
             storage.setApiKey(apiKey.trim());
-            await apiRequest("/api/career/recommendations/generate", {
-                method: "POST",
-                body: JSON.stringify({ studentId, model, apiKey: apiKey.trim() })
+            await consumeStream({
+                studentId,
+                model,
+                apiKey: apiKey.trim(),
+                supplementalContext
             });
             await loadRecommendations(studentId);
         } catch (err) {
-            setError(err instanceof Error ? err.message : "生成失败");
+            setError(err instanceof Error ? err.message : "生成选科建议失败");
         } finally {
             setLoading(false);
         }
@@ -217,154 +280,99 @@ export const CareerPanel = ({ user }: { user: User }) => {
     return (
         <section className="panel-grid">
             <article className="panel-card wide">
-                <h3>生涯规划与选课推荐</h3>
+                <h3>生涯发展与选科建议</h3>
                 <div className="inline-form">
                     <label>
                         选择学生
-                        <select
-                            value={studentId ?? ""}
-                            onChange={(event) => setStudentId(Number(event.target.value))}
-                            disabled={students.length <= 1 && (user.role === "parent" || user.role === "student")}
-                        >
+                        <select value={studentId ?? ""} onChange={(event) => setStudentId(Number(event.target.value))}>
                             {students.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                    {item.name} / {item.grade} / {item.className}
-                                </option>
+                                <option key={item.id} value={item.id}>{item.name} / {item.grade} / {item.className}</option>
                             ))}
                         </select>
                     </label>
                     <label>
                         模型
                         <select value={model} onChange={(event) => setModel(event.target.value)}>
-                            <option value="glm-4.7-flash">GLM-4.7-Flash</option>
-                            <option value="glm-4.1v-thinking-flash">GLM-4.1V-Thinking-Flash</option>
-                            <option value="glm-4.6v-flash">GLM-4.6V-Flash</option>
+                            {models.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                    {item.name} / {item.pricingTier === "paid" ? "收费" : "免费"}
+                                </option>
+                            ))}
                         </select>
                     </label>
                     <label>
                         API Key
-                        <input
-                            value={apiKey}
-                            onChange={(event) => setApiKey(event.target.value)}
-                            placeholder="请输入可用的 API Key"
-                        />
+                        <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="请输入可用的 API Key" />
                     </label>
                     <button className="primary-btn" onClick={generate} disabled={loading}>
-                        {loading ? "生成中..." : "生成选课建议"}
+                        {loading ? "生成中..." : "流式生成选科建议"}
                     </button>
-                    <button
-                        className="secondary-btn"
-                        onClick={() => void downloadExport("/api/admin/export/module/career-recommendations", "career-recommendations")}
-                    >
-                        导出推荐记录
-                    </button>
-                    <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=career")}>
-                        进入AI聊天
-                    </button>
+                    <button className="secondary-btn" onClick={() => void downloadExport("/api/admin/export/module/career-recommendations", "career-recommendations")}>导出建议记录</button>
+                    <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=career")}>进入 AI 助手</button>
                 </div>
 
                 <div className="inline-form section-actions">
                     <label>
                         学段
-                        <select
-                            value={selectionForm.academicStage}
-                            onChange={(event) =>
-                                setSelectionForm((prev) => ({
-                                    ...prev,
-                                    academicStage: event.target.value
-                                }))
-                            }
-                            disabled={!canEditSelection || !selectedStudent}
-                        >
-                            {stageOptions.map((item) => (
-                                <option key={item} value={item}>
-                                    {item}
-                                </option>
-                            ))}
+                        <select value={selectionForm.academicStage} onChange={(event) => setSelectionForm((prev) => ({ ...prev, academicStage: event.target.value }))}>
+                            {stageOptions.map((item) => <option key={item} value={item}>{item}</option>)}
                         </select>
                     </label>
                     <label>
                         首选科
-                        <select
-                            value={selectionForm.firstSelectedSubject}
-                            onChange={(event) =>
-                                setSelectionForm((prev) => ({
-                                    ...prev,
-                                    firstSelectedSubject: event.target.value
-                                }))
-                            }
-                            disabled={!canEditSelection || selectionForm.academicStage === "高一上"}
-                        >
+                        <select value={selectionForm.firstSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, firstSelectedSubject: event.target.value }))}>
                             <option value="">请选择</option>
-                            {(rules?.firstSubjectOptions ?? ["物理", "历史"]).map((item) => (
-                                <option key={item} value={item}>
-                                    {item}
-                                </option>
-                            ))}
+                            {(rules?.firstSubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
                         </select>
                     </label>
                     <label>
                         再选科1
-                        <select
-                            value={selectionForm.secondSelectedSubject}
-                            onChange={(event) =>
-                                setSelectionForm((prev) => ({
-                                    ...prev,
-                                    secondSelectedSubject: event.target.value
-                                }))
-                            }
-                            disabled={!canEditSelection || selectionForm.academicStage === "高一上"}
-                        >
+                        <select value={selectionForm.secondSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, secondSelectedSubject: event.target.value }))}>
                             <option value="">请选择</option>
-                            {(rules?.secondarySubjectOptions ?? ["化学", "生物", "政治", "地理"]).map((item) => (
-                                <option key={item} value={item}>
-                                    {item}
-                                </option>
-                            ))}
+                            {(rules?.secondarySubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
                         </select>
                     </label>
                     <label>
                         再选科2
-                        <select
-                            value={selectionForm.thirdSelectedSubject}
-                            onChange={(event) =>
-                                setSelectionForm((prev) => ({
-                                    ...prev,
-                                    thirdSelectedSubject: event.target.value
-                                }))
-                            }
-                            disabled={!canEditSelection || selectionForm.academicStage === "高一上"}
-                        >
+                        <select value={selectionForm.thirdSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, thirdSelectedSubject: event.target.value }))}>
                             <option value="">请选择</option>
-                            {(rules?.secondarySubjectOptions ?? ["化学", "生物", "政治", "地理"]).map((item) => (
-                                <option key={item} value={item}>
-                                    {item}
-                                </option>
-                            ))}
+                            {(rules?.secondarySubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
                         </select>
                     </label>
-                    <button
-                        className="secondary-btn"
-                        onClick={() => void saveSelection()}
-                        disabled={!canEditSelection || !selectedStudent || selectionSaving}
-                    >
-                        {selectionSaving ? "保存中..." : "保存学段与选科"}
+                    <button className="secondary-btn" onClick={() => void saveSelection()} disabled={selectionSaving}>
+                        {selectionSaving ? "保存中..." : "保存选科确认"}
                     </button>
                 </div>
 
+                <label>
+                    自由补充信息
+                    <textarea
+                        rows={4}
+                        value={supplementalContext}
+                        onChange={(event) => setSupplementalContext(event.target.value)}
+                        placeholder="可补充家庭期望、兴趣变化、竞赛经历、老师观察、身体情况等，大模型会结合成绩一起判断。"
+                    />
+                </label>
                 <p className="muted-text">
-                    当前规则：高一上仅九科学习，不可提交选科；高一下/高二/高三按“物理或历史 + 四选二”执行。
+                    当前学生：{selectedStudent?.subjectCombination ?? "暂无组合"} / {selectionStatusLabelMap[selectedStudent?.selectionStatus ?? "not_started"] ?? "待完善"}
                 </p>
             </article>
 
+            {(loading || streamingAnswer) ? (
+                <article className="panel-card wide">
+                    <h4>生成中的选科建议</h4>
+                    <pre className="answer-box">{streamingAnswer || "模型正在综合分析成绩、兴趣和补充背景..."}</pre>
+                </article>
+            ) : null}
+
             <article className="panel-card wide">
-                <h4>推荐历史</h4>
+                <h4>建议历史</h4>
                 <div className="list-box">
                     {recommendations.slice(0, 5).map((item) => (
                         <div className="list-item" key={item.id}>
                             <strong>{item.selectedCombination}</strong>
                             <p>{item.reasoning}</p>
-                            <p>建议专业: {item.majorSuggestions}</p>
+                            <p>专业方向：{item.majorSuggestions}</p>
                             <small>{new Date(item.createdAt).toLocaleString()}</small>
                         </div>
                     ))}
@@ -372,16 +380,13 @@ export const CareerPanel = ({ user }: { user: User }) => {
             </article>
 
             <article className="panel-card wide">
-                <h4>理由可解释面板</h4>
+                <h4>可解释面板</h4>
                 {recommendations.length > 0 ? (
                     (() => {
-                        const latest = recommendations[0];
-                        const breakdown = parseBreakdown(latest.scoreBreakdown);
-
+                        const breakdown = parseBreakdown(recommendations[0].scoreBreakdown);
                         if (!breakdown) {
-                            return <p>当前推荐记录不含结构化解释数据。</p>;
+                            return <p>当前记录暂无结构化解释。</p>;
                         }
-
                         return (
                             <div className="explain-grid">
                                 <div className="score-grid">
@@ -396,7 +401,6 @@ export const CareerPanel = ({ user }: { user: User }) => {
                                         <strong>{breakdown.confidence ?? "--"}</strong>
                                     </div>
                                 </div>
-
                                 <div>
                                     <h5>证据链</h5>
                                     <div className="list-box compact">
@@ -409,16 +413,15 @@ export const CareerPanel = ({ user }: { user: User }) => {
                                         ))}
                                     </div>
                                 </div>
-
                                 <div>
-                                    <h5>反事实说明</h5>
+                                    <h5>反事实分析</h5>
                                     <p>{breakdown.counterfactual ?? "暂无"}</p>
                                 </div>
                             </div>
                         );
                     })()
                 ) : (
-                    <p>请先生成一条选课建议。</p>
+                    <p>请先生成一条选科建议。</p>
                 )}
             </article>
 

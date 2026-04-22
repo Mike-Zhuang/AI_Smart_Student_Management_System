@@ -7,6 +7,7 @@ import { requireAuth, canAccessStudent } from "../middleware/auth.js";
 import { callZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { normalizeExamName, repairText } from "../utils/text.js";
 
 export const growthRouter = Router();
 
@@ -63,12 +64,25 @@ growthRouter.get("/students/:studentId/profile", requireAuth, (req: AuthedReques
         success: true,
         message: "查询成功",
         data: {
-            student,
-            profile: profile ?? {
-                summary: "暂无成长画像，请先完成数据导入或等待系统生成。",
-                riskLevel: "",
-                lastUpdated: ""
-            }
+            student: {
+                ...student,
+                name: repairText(student.name),
+                grade: repairText(student.grade),
+                className: repairText(student.className),
+                interests: repairText(student.interests ?? ""),
+                careerGoal: repairText(student.careerGoal ?? "")
+            },
+            profile: profile
+                ? {
+                    ...profile,
+                    summary: repairText(profile.summary),
+                    riskLevel: repairText(profile.riskLevel)
+                }
+                : {
+                    summary: "暂无成长画像，请先完成数据导入或等待系统生成。",
+                    riskLevel: "",
+                    lastUpdated: ""
+                }
         }
     });
 });
@@ -102,9 +116,9 @@ growthRouter.get("/students/:studentId/trends", requireAuth, (req: AuthedRequest
     }
 
     const trend = Array.from(grouped.values()).map((item) => ({
-        examName: item.examName,
+        examName: normalizeExamName(item.examName) || repairText(item.examName),
         avgScore: Number((item.total / item.count).toFixed(1))
-    }));
+    })).filter((item) => item.examName);
 
     res.json({ success: true, message: "查询成功", data: trend });
 });
@@ -124,7 +138,16 @@ growthRouter.get("/students/:studentId/alerts", requireAuth, (req: AuthedRequest
         )
         .all(studentId);
 
-    res.json({ success: true, message: "查询成功", data: rows });
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: (rows as Array<{ id: number; alertType: string; content: string; status: string; createdAt: string }>).map((item) => ({
+            ...item,
+            alertType: repairText(item.alertType),
+            content: repairText(item.content),
+            status: repairText(item.status)
+        }))
+    });
 });
 
 growthRouter.post("/students/:studentId/ai-diagnosis", requireAuth, async (req: AuthedRequest, res) => {

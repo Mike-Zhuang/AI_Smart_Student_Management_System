@@ -14,7 +14,7 @@ type ModelItem = {
     isDefault: boolean;
 };
 
-type Scenario = "career" | "growth" | "home-school" | "teaching";
+type Scenario = "career" | "growth" | "home-school";
 
 type PromptTemplate = {
     id: string;
@@ -59,14 +59,13 @@ type StreamCompletePayload = {
 };
 
 const SCENARIO_LABEL: Record<Scenario, string> = {
-    career: "生涯选课",
+    career: "生涯发展与选科",
     growth: "学业成长",
-    "home-school": "家校沟通",
-    teaching: "教研管理"
+    "home-school": "家校沟通"
 };
 
 const isScenario = (value: string | null): value is Scenario => {
-    return value === "career" || value === "growth" || value === "home-school" || value === "teaching";
+    return value === "career" || value === "growth" || value === "home-school";
 };
 
 const FIELD_LABEL_MAP: Record<string, string> = {
@@ -103,10 +102,9 @@ const FIELD_LABEL_MAP: Record<string, string> = {
 };
 
 const TEMPLATE_OUTPUT_GUIDE: Record<string, string> = {
-    "career-structured-v1": "将展示推荐组合、综合结论、维度评分、证据链、反事实分析、专业建议和置信度。",
+    "career-structured-v1": "将展示推荐组合、综合判断、维度评分、证据链、反事实分析、专业建议和置信度。",
     "growth-risk-v1": "将展示风险等级、风险因子、干预动作和后续跟进建议。",
-    "home-school-reply-v1": "将生成可直接发送的家校沟通回复草稿。",
-    "teaching-research-v1": "将展示周计划、验收指标、风险点与缓解措施。"
+    "home-school-reply-v1": "将生成可直接发送的家校沟通回复草稿。"
 };
 
 const toLabel = (key: string): string => {
@@ -548,7 +546,7 @@ export const AiLabPanel = () => {
         <section className="panel-grid">
             <article className="panel-card wide">
                 <h3>AI助手中心（智谱）</h3>
-                <p>支持会话历史与上下文续聊。默认使用免费模型，可按需切换收费模型。</p>
+                <p>支持会话历史、上下文续聊与流式输出。默认优先免费模型，也可按需切换收费模型。</p>
             </article>
 
             <article className="panel-card wide">
@@ -598,12 +596,11 @@ export const AiLabPanel = () => {
                     ) : null}
 
                     <label>
-                        场景模板
+                        场景
                         <select value={scenario} onChange={(event) => setScenario(event.target.value as Scenario)}>
-                            <option value="career">生涯选课</option>
+                            <option value="career">生涯发展与选科</option>
                             <option value="growth">学业成长</option>
                             <option value="home-school">家校沟通</option>
-                            <option value="teaching">教研管理</option>
                         </select>
                     </label>
 

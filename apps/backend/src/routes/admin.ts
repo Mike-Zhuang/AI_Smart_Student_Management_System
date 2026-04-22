@@ -229,14 +229,13 @@ adminRouter.get("/export/module/:module", (req, res) => {
                 )
                 .all() as Array<Record<string, unknown>>;
             break;
-        case "teaching-tasks":
+        case "class-logs":
             rows = db
                 .prepare(
-                    `SELECT t.id, u.display_name as teacherName, t.title, t.task_type as taskType,
-                  t.status, t.due_date as dueDate, t.created_at as createdAt
-           FROM teaching_tasks t
-           JOIN users u ON u.id = t.teacher_user_id
-           ORDER BY t.created_at DESC`
+                    `SELECT id, class_name as className, student_name as studentName, category, title, content,
+                            record_date as recordDate, created_at as createdAt
+                     FROM class_logs
+                     ORDER BY created_at DESC`
                 )
                 .all() as Array<Record<string, unknown>>;
             break;

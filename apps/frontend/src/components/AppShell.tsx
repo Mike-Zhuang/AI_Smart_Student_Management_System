@@ -1,16 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { roleHomeMessageMap, roleLabelMap } from "../lib/labels";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
 import { SiteFooter } from "./SiteFooter";
 
 const NAV_ITEMS = [
-    { key: "overview", label: "总览", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+    { key: "overview", label: "首页", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "home-school", label: "家校沟通", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
-    { key: "career", label: "生涯选课", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+    { key: "career", label: "生涯发展与选科", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "growth", label: "学业成长", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
-    { key: "head-teacher", label: "班主任工作台", roles: ["admin", "head_teacher"] },
-    { key: "teaching", label: "教研管理", roles: ["admin", "teacher", "head_teacher"] },
+    { key: "head-teacher", label: "班级治理中心", roles: ["admin", "head_teacher"] },
+    { key: "org-structure", label: "组织架构", roles: ["admin", "teacher", "head_teacher"] },
     { key: "ai-lab", label: "AI助手中心", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "account", label: "我的账号", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "data-import", label: "数据导入", roles: ["admin", "teacher", "head_teacher"] }
@@ -37,8 +38,8 @@ export const AppShell = ({
         <div className={`app-layout ${mobileNavOpen ? "mobile-nav-open" : ""}`}>
             <aside className={`app-sidebar ${mobileNavOpen ? "open" : ""}`}>
                 <div className="brand-box">
-                    <h1>高中AI管理辅助系统</h1>
-                    <p>Management Assistant · Demo</p>
+                    <h1>高中管理协同平台</h1>
+                    <p>面向真实校园日常管理与协同</p>
                 </div>
 
                 <nav className="nav-list">
@@ -56,7 +57,7 @@ export const AppShell = ({
 
                 <div className="sidebar-footer">
                     <p>
-                        当前角色: <strong>{user.role}</strong>
+                        当前身份: <strong>{roleLabelMap[user.role]}</strong>
                     </p>
                     <button
                         className="secondary-btn"
@@ -92,7 +93,7 @@ export const AppShell = ({
                         </button>
                         <div>
                             <h2>{user.displayName}</h2>
-                            <p>欢迎回来，请按模块完成管理与评比演示</p>
+                            <p>{roleHomeMessageMap[user.role]}</p>
                         </div>
                     </header>
                     {children}

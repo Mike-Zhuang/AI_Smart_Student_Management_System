@@ -11,9 +11,10 @@ import { authRouter } from "./routes/auth.js";
 import { careerRouter } from "./routes/career.js";
 import { dataImportRouter } from "./routes/dataImport.js";
 import { growthRouter } from "./routes/growth.js";
+import { headTeacherRouter } from "./routes/headTeacher.js";
 import { homeSchoolRouter } from "./routes/homeSchool.js";
+import { orgStructureRouter } from "./routes/orgStructure.js";
 import { studentsRouter } from "./routes/students.js";
-import { teachingRouter } from "./routes/teaching.js";
 
 dotenv.config();
 initDatabase();
@@ -37,7 +38,8 @@ app.use("/api/students", studentsRouter);
 app.use("/api/home-school", homeSchoolRouter);
 app.use("/api/career", careerRouter);
 app.use("/api/growth", growthRouter);
-app.use("/api/teaching", teachingRouter);
+app.use("/api/head-teacher", headTeacherRouter);
+app.use("/api/org-structure", orgStructureRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/data-import", dataImportRouter);
 

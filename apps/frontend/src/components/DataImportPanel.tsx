@@ -1,9 +1,11 @@
 import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import { apiRequest } from "../lib/api";
 import { downloadFile } from "../lib/export";
 
 type ImportKind = "students" | "exam-results" | "teachers";
+type ManageKind = ImportKind;
 
 type ImportSummary = {
     total: number;
@@ -21,6 +23,7 @@ type ImportSummary = {
         role: string;
         relatedName: string;
     }>;
+    issuanceBatchId?: number;
     errors: Array<{
         line: number;
         field: string;
@@ -34,6 +37,27 @@ type StudentRow = {
     name: string;
     grade: string;
     className: string;
+};
+
+type ExamRow = {
+    id: number;
+    studentNo: string;
+    studentName: string;
+    className: string;
+    examName: string;
+    examDate: string;
+    subject: string;
+    score: number;
+};
+
+type TeacherLinkRow = {
+    id: number;
+    teacherUserId: number;
+    teacherUsername: string;
+    displayName: string;
+    className: string;
+    subjectName: string;
+    isHeadTeacher: number;
 };
 
 type ImportFeedback = {
@@ -61,7 +85,7 @@ const IMPORT_CONFIG: Array<{
     {
         kind: "exam-results",
         title: "考试成绩数据",
-        description: "导入学号对应的考试名称、日期、科目与分数。",
+        description: "导入学号对应的考试名称、日期、科目与分数，并自动修正常见中文乱码。",
         templateEndpoint: "/api/data-import/template-files/exam-results",
         templateFilename: "exam-results-template.xlsx",
         uploadEndpoint: "/api/data-import/exam-results"
@@ -89,40 +113,95 @@ const defaultFeedback: Record<ImportKind, ImportFeedback | null> = {
 };
 
 export const DataImportPanel = () => {
+    const navigate = useNavigate();
     const [selectedFiles, setSelectedFiles] = useState<Record<ImportKind, File | null>>(defaultFiles);
     const [feedback, setFeedback] = useState<Record<ImportKind, ImportFeedback | null>>(defaultFeedback);
     const [uploadingKind, setUploadingKind] = useState<ImportKind | null>(null);
+
     const [students, setStudents] = useState<StudentRow[]>([]);
     const [studentKeyword, setStudentKeyword] = useState("");
-    const [deletingStudentId, setDeletingStudentId] = useState<number | null>(null);
-    const [deleteFeedback, setDeleteFeedback] = useState("");
+    const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+
+    const [examRows, setExamRows] = useState<ExamRow[]>([]);
+    const [examKeyword, setExamKeyword] = useState("");
+    const [examDateFilter, setExamDateFilter] = useState("");
+    const [selectedExamIds, setSelectedExamIds] = useState<number[]>([]);
+
+    const [teacherRows, setTeacherRows] = useState<TeacherLinkRow[]>([]);
+    const [teacherKeyword, setTeacherKeyword] = useState("");
+    const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
+
+    const [manageFeedback, setManageFeedback] = useState<Record<ManageKind, string>>({
+        students: "",
+        "exam-results": "",
+        teachers: ""
+    });
+    const [managingKind, setManagingKind] = useState<ManageKind | null>(null);
 
     const loadStudents = async () => {
+        const response = await apiRequest<StudentRow[]>("/api/students");
+        setStudents([...response.data].sort((left, right) => right.id - left.id));
+    };
+
+    const loadExamRows = async () => {
+        const query = new URLSearchParams();
+        if (examKeyword.trim()) {
+            query.set("examName", examKeyword.trim());
+        }
+        if (examDateFilter.trim()) {
+            query.set("examDate", examDateFilter);
+        }
+        const response = await apiRequest<ExamRow[]>(`/api/data-import/exam-results/manage${query.size ? `?${query.toString()}` : ""}`);
+        setExamRows(response.data);
+    };
+
+    const loadTeacherRows = async () => {
+        const response = await apiRequest<TeacherLinkRow[]>("/api/data-import/teachers/manage");
+        setTeacherRows(response.data);
+    };
+
+    const loadManageData = async () => {
         try {
-            const response = await apiRequest<StudentRow[]>("/api/students");
-            const ordered = [...response.data].sort((left, right) => right.id - left.id);
-            setStudents(ordered);
+            await Promise.all([loadStudents(), loadExamRows(), loadTeacherRows()]);
         } catch (error) {
-            setDeleteFeedback(error instanceof Error ? error.message : "加载学生列表失败");
+            const message = error instanceof Error ? error.message : "加载数据管理列表失败";
+            setManageFeedback({
+                students: message,
+                "exam-results": message,
+                teachers: message
+            });
         }
     };
 
     useEffect(() => {
-        void loadStudents();
+        void loadManageData();
     }, []);
+
+    useEffect(() => {
+        void loadExamRows();
+    }, [examKeyword, examDateFilter]);
 
     const filteredStudents = useMemo(() => {
         const keyword = studentKeyword.trim().toLowerCase();
-        if (!keyword) {
-            return students.slice(0, 12);
-        }
-
-        return students
-            .filter((item) =>
+        const target = keyword
+            ? students.filter((item) =>
                 [item.studentNo, item.name, item.grade, item.className].some((value) => value.toLowerCase().includes(keyword))
             )
-            .slice(0, 20);
+            : students;
+        return target.slice(0, 60);
     }, [studentKeyword, students]);
+
+    const filteredTeachers = useMemo(() => {
+        const keyword = teacherKeyword.trim().toLowerCase();
+        const target = keyword
+            ? teacherRows.filter((item) =>
+                [item.teacherUsername, item.displayName, item.className, item.subjectName].some((value) =>
+                    String(value ?? "").toLowerCase().includes(keyword)
+                )
+            )
+            : teacherRows;
+        return target.slice(0, 80);
+    }, [teacherKeyword, teacherRows]);
 
     const downloadIssuanceRecords = (kind: ImportKind) => {
         const records = feedback[kind]?.summary?.issuanceRecords ?? [];
@@ -162,10 +241,10 @@ export const DataImportPanel = () => {
                 ...prev,
                 [kind]: { type: "success", message: "模板下载成功，请在 Excel 或 CSV 中填写后上传。" }
             }));
-        } catch (err) {
+        } catch (error) {
             setFeedback((prev) => ({
                 ...prev,
-                [kind]: { type: "error", message: err instanceof Error ? err.message : "模板下载失败" }
+                [kind]: { type: "error", message: error instanceof Error ? error.message : "模板下载失败" }
             }));
         }
     };
@@ -198,8 +277,7 @@ export const DataImportPanel = () => {
             });
 
             const summary = response.data;
-            const message = `总计 ${summary.total} 行，新增 ${summary.imported} 条，更新 ${summary.updated} 条，失败 ${summary.failed} 行。账号新建 ${summary.accountCreated} 个、账号同步更新 ${summary.accountUpdated} 个。`;
-
+            const message = `总计 ${summary.total} 行，新增 ${summary.imported} 条，更新 ${summary.updated} 条，失败 ${summary.failed} 行。账号新建 ${summary.accountCreated} 个，账号更新 ${summary.accountUpdated} 个。`;
             setFeedback((prev) => ({
                 ...prev,
                 [kind]: {
@@ -213,23 +291,101 @@ export const DataImportPanel = () => {
                 downloadIssuanceRecords(kind);
             }
 
-            await loadStudents();
-        } catch (err) {
+            await loadManageData();
+        } catch (error) {
             setFeedback((prev) => ({
                 ...prev,
-                [kind]: { type: "error", message: err instanceof Error ? err.message : "导入失败" }
+                [kind]: { type: "error", message: error instanceof Error ? error.message : "导入失败" }
             }));
         } finally {
             setUploadingKind(null);
         }
     };
 
+    const batchDeleteStudents = async () => {
+        if (selectedStudentIds.length === 0) {
+            return;
+        }
+        const confirmed = window.confirm(`确定批量删除 ${selectedStudentIds.length} 名学生吗？该操作会同时删除其成绩、画像、预警、选科建议与学生账号。`);
+        if (!confirmed) {
+            return;
+        }
+
+        setManagingKind("students");
+        setManageFeedback((prev) => ({ ...prev, students: "" }));
+        try {
+            const response = await apiRequest<{ count: number }>("/api/students/batch-delete", {
+                method: "POST",
+                body: JSON.stringify({ ids: selectedStudentIds })
+            });
+            setManageFeedback((prev) => ({ ...prev, students: response.message }));
+            setSelectedStudentIds([]);
+            await loadStudents();
+        } catch (error) {
+            setManageFeedback((prev) => ({ ...prev, students: error instanceof Error ? error.message : "批量删除学生失败" }));
+        } finally {
+            setManagingKind(null);
+        }
+    };
+
+    const batchDeleteExamRows = async () => {
+        if (selectedExamIds.length === 0) {
+            return;
+        }
+        const confirmed = window.confirm(`确定删除选中的 ${selectedExamIds.length} 条成绩记录吗？`);
+        if (!confirmed) {
+            return;
+        }
+
+        setManagingKind("exam-results");
+        setManageFeedback((prev) => ({ ...prev, "exam-results": "" }));
+        try {
+            const response = await apiRequest<{ count?: number }>("/api/data-import/exam-results/batch-delete", {
+                method: "POST",
+                body: JSON.stringify({ ids: selectedExamIds })
+            });
+            setManageFeedback((prev) => ({ ...prev, "exam-results": response.message }));
+            setSelectedExamIds([]);
+            await loadExamRows();
+        } catch (error) {
+            setManageFeedback((prev) => ({ ...prev, "exam-results": error instanceof Error ? error.message : "批量删除成绩失败" }));
+        } finally {
+            setManagingKind(null);
+        }
+    };
+
+    const batchDeleteTeacherRows = async () => {
+        if (selectedTeacherIds.length === 0) {
+            return;
+        }
+        const confirmed = window.confirm(`确定删除选中的 ${selectedTeacherIds.length} 条教师班级关系吗？若教师无其他班级关系且不是管理员，其教师账号也会一并删除。`);
+        if (!confirmed) {
+            return;
+        }
+
+        setManagingKind("teachers");
+        setManageFeedback((prev) => ({ ...prev, teachers: "" }));
+        try {
+            const response = await apiRequest<{ count?: number }>("/api/data-import/teachers/batch-delete", {
+                method: "POST",
+                body: JSON.stringify({ ids: selectedTeacherIds })
+            });
+            setManageFeedback((prev) => ({ ...prev, teachers: response.message }));
+            setSelectedTeacherIds([]);
+            await loadTeacherRows();
+        } catch (error) {
+            setManageFeedback((prev) => ({ ...prev, teachers: error instanceof Error ? error.message : "批量删除教师班级关系失败" }));
+        } finally {
+            setManagingKind(null);
+        }
+    };
+
     return (
         <section className="panel-grid">
             <article className="panel-card wide">
-                <h3>真实数据导入（Excel / CSV 直传）</h3>
-                <p>教师可直接下载 Excel 模板填写并上传，系统会兼容 XLSX、UTF-8 CSV 与 GBK/GB18030 CSV。</p>
-                <p className="muted-text">账号初始密码不会在系统中长期明文保存。若导入时生成了新账号，系统会自动下载 Excel 发放单；后续如需再次发放，请到“我的账号”中重置密码。</p>
+                <h3>真实数据导入与清理</h3>
+                <p>支持 XLSX、UTF-8 CSV、GBK/GB18030 CSV 直传。系统会尽量修复中文乱码，并提供导入后管理与批量删除入口。</p>
+                <p className="muted-text">账号初始密码不会在系统中长期明文保存。若导入时生成了新账号，系统会自动下载账号发放单；若当时忘记保存，也可以稍后到“我的账号 → 账号发放台账”重新下载未改密账号。</p>
             </article>
 
             {IMPORT_CONFIG.map((config) => {
@@ -243,12 +399,7 @@ export const DataImportPanel = () => {
                         <h4>{config.title}</h4>
                         <p>{config.description}</p>
                         <div className="file-upload-row section-actions">
-                            <button
-                                type="button"
-                                className="secondary-btn"
-                                onClick={() => void handleTemplateDownload(config.kind)}
-                                disabled={isUploading}
-                            >
+                            <button type="button" className="secondary-btn" onClick={() => void handleTemplateDownload(config.kind)} disabled={isUploading}>
                                 下载模板
                             </button>
                             <input
@@ -258,12 +409,7 @@ export const DataImportPanel = () => {
                                 onChange={(event) => onFileChange(config.kind, event)}
                                 disabled={isUploading}
                             />
-                            <button
-                                type="button"
-                                className="primary-btn"
-                                onClick={() => void handleUpload(config.kind)}
-                                disabled={isUploading || !currentFile}
-                            >
+                            <button type="button" className="primary-btn" onClick={() => void handleUpload(config.kind)} disabled={isUploading || !currentFile}>
                                 {isUploading ? "上传中..." : "上传导入"}
                             </button>
                         </div>
@@ -275,14 +421,21 @@ export const DataImportPanel = () => {
                                 <p className={currentFeedback.type === "success" ? "success-text" : "error-text"}>{currentFeedback.message}</p>
                                 {currentFeedback.summary?.issuanceRecords?.length ? (
                                     <>
-                                        <p className="warning-box">本次导入已生成一次性初始密码，请立即下载发放单并提醒相关人员首次登录后修改密码。</p>
-                                        <button
-                                            type="button"
-                                            className="secondary-btn"
-                                            onClick={() => downloadIssuanceRecords(config.kind)}
-                                        >
-                                            下载账号发放单
-                                        </button>
+                                        <p className="warning-box">本次导入已生成一次性初始密码，请立即下载账号发放单并完成发放。</p>
+                                        <div className="account-actions">
+                                            <button type="button" className="secondary-btn" onClick={() => downloadIssuanceRecords(config.kind)}>
+                                                下载账号发放单
+                                            </button>
+                                            {currentFeedback.summary.issuanceBatchId ? (
+                                                <button
+                                                    type="button"
+                                                    className="secondary-btn"
+                                                    onClick={() => navigate(`/dashboard/account?batchId=${currentFeedback.summary?.issuanceBatchId ?? ""}`)}
+                                                >
+                                                    查看本次发放批次
+                                                </button>
+                                            ) : null}
+                                        </div>
                                     </>
                                 ) : null}
                                 {hasErrors ? (
@@ -305,77 +458,172 @@ export const DataImportPanel = () => {
 
             <article className="panel-card wide">
                 <h3>学生数据清理</h3>
-                <p>用于删除误导入、乱码或测试学生。删除后会一并移除该学生的成绩、画像、预警、选课建议及学生账号，请谨慎操作。</p>
+                <p>用于删除误导入、测试或乱码学生。删除后会级联移除成绩、画像、预警、选科建议与学生账号。</p>
                 <div className="inline-form section-actions">
                     <label>
                         搜索学生
-                        <input
-                            value={studentKeyword}
-                            onChange={(event) => {
-                                setStudentKeyword(event.target.value);
-                                setDeleteFeedback("");
-                            }}
-                            placeholder="输入学号、姓名、年级或班级"
-                        />
+                        <input value={studentKeyword} onChange={(event) => setStudentKeyword(event.target.value)} placeholder="输入学号、姓名、年级或班级" />
                     </label>
+                    <button type="button" className="secondary-btn" onClick={() => void loadStudents()}>
+                        刷新学生列表
+                    </button>
+                    <button type="button" className="primary-btn" disabled={selectedStudentIds.length === 0 || managingKind === "students"} onClick={() => void batchDeleteStudents()}>
+                        {managingKind === "students" ? "删除中..." : `批量删除学生（${selectedStudentIds.length}）`}
+                    </button>
                 </div>
-                {deleteFeedback ? <p className={deleteFeedback.includes("已删除") ? "success-text" : "error-text"}>{deleteFeedback}</p> : null}
+                {manageFeedback.students ? <p className={manageFeedback.students.includes("删除") ? "success-text" : "error-text"}>{manageFeedback.students}</p> : null}
                 <div className="table-scroll">
                     <table>
                         <thead>
                             <tr>
+                                <th></th>
                                 <th>学号</th>
                                 <th>姓名</th>
                                 <th>年级</th>
                                 <th>班级</th>
-                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
                             {filteredStudents.map((item) => (
                                 <tr key={item.id}>
+                                    <td>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedStudentIds.includes(item.id)}
+                                            onChange={(event) =>
+                                                setSelectedStudentIds((prev) => (event.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id)))
+                                            }
+                                        />
+                                    </td>
                                     <td>{item.studentNo}</td>
                                     <td>{item.name}</td>
                                     <td>{item.grade}</td>
                                     <td>{item.className}</td>
-                                    <td>
-                                        <button
-                                            type="button"
-                                            className="secondary-btn"
-                                            disabled={deletingStudentId === item.id}
-                                            onClick={async () => {
-                                                const confirmed = window.confirm(
-                                                    `确定删除学生 ${item.name}（${item.studentNo}）吗？该操作会同时删除该学生账号及相关成绩、画像、预警与推荐数据。`
-                                                );
-                                                if (!confirmed) {
-                                                    return;
-                                                }
-
-                                                setDeleteFeedback("");
-                                                setDeletingStudentId(item.id);
-                                                try {
-                                                    const response = await apiRequest<{ name: string; studentNo: string }>(`/api/students/${item.id}`, {
-                                                        method: "DELETE"
-                                                    });
-                                                    setDeleteFeedback(`${response.message}（${item.studentNo}）`);
-                                                    await loadStudents();
-                                                } catch (error) {
-                                                    setDeleteFeedback(error instanceof Error ? error.message : "删除学生失败");
-                                                } finally {
-                                                    setDeletingStudentId(null);
-                                                }
-                                            }}
-                                        >
-                                            {deletingStudentId === item.id ? "删除中..." : "删除学生"}
-                                        </button>
-                                    </td>
                                 </tr>
                             ))}
                             {filteredStudents.length === 0 ? (
                                 <tr>
-                                    <td colSpan={5} className="muted-text">
-                                        未找到匹配学生。
+                                    <td colSpan={5} className="muted-text">未找到匹配学生。</td>
+                                </tr>
+                            ) : null}
+                        </tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article className="panel-card wide">
+                <h3>成绩数据清理</h3>
+                <p>可按考试名称、考试日期筛选误导入成绩，并进行批量删除。若未导入成绩，成长页会显示“暂无成绩数据，请先导入成绩”。</p>
+                <div className="inline-form section-actions">
+                    <label>
+                        考试名称
+                        <input value={examKeyword} onChange={(event) => setExamKeyword(event.target.value)} placeholder="例如：高一下期中考试" />
+                    </label>
+                    <label>
+                        考试日期
+                        <input type="date" value={examDateFilter} onChange={(event) => setExamDateFilter(event.target.value)} />
+                    </label>
+                    <button type="button" className="secondary-btn" onClick={() => void loadExamRows()}>
+                        刷新成绩列表
+                    </button>
+                    <button type="button" className="primary-btn" disabled={selectedExamIds.length === 0 || managingKind === "exam-results"} onClick={() => void batchDeleteExamRows()}>
+                        {managingKind === "exam-results" ? "删除中..." : `批量删除成绩（${selectedExamIds.length}）`}
+                    </button>
+                </div>
+                {manageFeedback["exam-results"] ? <p className={manageFeedback["exam-results"].includes("删除") ? "success-text" : "error-text"}>{manageFeedback["exam-results"]}</p> : null}
+                <div className="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>考试名称</th>
+                                <th>考试日期</th>
+                                <th>学生</th>
+                                <th>班级</th>
+                                <th>科目</th>
+                                <th>分数</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {examRows.slice(0, 120).map((item) => (
+                                <tr key={item.id}>
+                                    <td>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedExamIds.includes(item.id)}
+                                            onChange={(event) =>
+                                                setSelectedExamIds((prev) => (event.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id)))
+                                            }
+                                        />
                                     </td>
+                                    <td>{item.examName}</td>
+                                    <td>{item.examDate}</td>
+                                    <td>{item.studentName}（{item.studentNo}）</td>
+                                    <td>{item.className}</td>
+                                    <td>{item.subject}</td>
+                                    <td>{item.score}</td>
+                                </tr>
+                            ))}
+                            {examRows.length === 0 ? (
+                                <tr>
+                                    <td colSpan={7} className="muted-text">当前筛选条件下暂无成绩记录。</td>
+                                </tr>
+                            ) : null}
+                        </tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article className="panel-card wide">
+                <h3>教师班级关系清理</h3>
+                <p>用于清理错误导入的教师—班级映射。若教师不再关联任何班级且角色不是管理员，系统会同步删除教师账号。</p>
+                <div className="inline-form section-actions">
+                    <label>
+                        搜索教师或班级
+                        <input value={teacherKeyword} onChange={(event) => setTeacherKeyword(event.target.value)} placeholder="输入账号、姓名、班级或学科" />
+                    </label>
+                    <button type="button" className="secondary-btn" onClick={() => void loadTeacherRows()}>
+                        刷新教师列表
+                    </button>
+                    <button type="button" className="primary-btn" disabled={selectedTeacherIds.length === 0 || managingKind === "teachers"} onClick={() => void batchDeleteTeacherRows()}>
+                        {managingKind === "teachers" ? "删除中..." : `批量删除关系（${selectedTeacherIds.length}）`}
+                    </button>
+                </div>
+                {manageFeedback.teachers ? <p className={manageFeedback.teachers.includes("删除") ? "success-text" : "error-text"}>{manageFeedback.teachers}</p> : null}
+                <div className="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>账号</th>
+                                <th>姓名</th>
+                                <th>班级</th>
+                                <th>学科</th>
+                                <th>身份</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filteredTeachers.map((item) => (
+                                <tr key={item.id}>
+                                    <td>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedTeacherIds.includes(item.id)}
+                                            onChange={(event) =>
+                                                setSelectedTeacherIds((prev) => (event.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id)))
+                                            }
+                                        />
+                                    </td>
+                                    <td>{item.teacherUsername}</td>
+                                    <td>{item.displayName}</td>
+                                    <td>{item.className}</td>
+                                    <td>{item.subjectName || "待补充"}</td>
+                                    <td>{item.isHeadTeacher ? "班主任" : "任课教师"}</td>
+                                </tr>
+                            ))}
+                            {filteredTeachers.length === 0 ? (
+                                <tr>
+                                    <td colSpan={6} className="muted-text">未找到匹配教师关系。</td>
                                 </tr>
                             ) : null}
                         </tbody>

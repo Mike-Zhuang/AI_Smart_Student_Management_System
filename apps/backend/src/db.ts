@@ -11,6 +11,7 @@ import {
     validateSelectionByStage
 } from "./utils/subjectRules.js";
 import { hashPassword } from "./utils/auth.js";
+import { repairDatabaseText } from "./utils/text.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -147,12 +148,26 @@ const createSchema = (): void => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL,
       parent_user_id INTEGER,
+      requester_user_id INTEGER,
+      requester_role TEXT,
+      leave_type TEXT NOT NULL DEFAULT 'personal',
       reason TEXT NOT NULL,
       start_date TEXT NOT NULL,
       end_date TEXT NOT NULL,
+      start_at TEXT,
+      end_at TEXT,
+      contact_phone TEXT,
+      emergency_contact TEXT,
       status TEXT NOT NULL,
+      parent_confirm_status TEXT NOT NULL DEFAULT 'pending',
+      parent_confirm_note TEXT,
+      parent_confirmed_at TEXT,
+      review_status TEXT,
       review_note TEXT,
       reviewed_by INTEGER,
+      reviewed_at TEXT,
+      completion_status TEXT,
+      completed_at TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY(student_id) REFERENCES students(id)
     );
@@ -167,26 +182,6 @@ const createSchema = (): void => {
       score_breakdown TEXT NOT NULL,
       created_at TEXT NOT NULL,
       FOREIGN KEY(student_id) REFERENCES students(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS teaching_tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      teacher_user_id INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      task_type TEXT NOT NULL,
-      status TEXT NOT NULL,
-      due_date TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS teaching_research (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      teacher_user_id INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      content TEXT NOT NULL,
-      category TEXT NOT NULL,
-      performance_score REAL NOT NULL,
-      created_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS public_major_requirements (
@@ -211,6 +206,117 @@ const createSchema = (): void => {
       created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
+
+    CREATE TABLE IF NOT EXISTS class_profiles (
+      class_name TEXT PRIMARY KEY,
+      class_motto TEXT,
+      class_style TEXT,
+      class_slogan TEXT,
+      course_schedule TEXT,
+      class_rules TEXT,
+      seat_map TEXT,
+      class_committee TEXT,
+      updated_by INTEGER,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS class_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_name TEXT NOT NULL,
+      student_id INTEGER,
+      student_name TEXT,
+      category TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      record_date TEXT NOT NULL,
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS wellbeing_posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      attachment_name TEXT,
+      attachment_path TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS class_gallery (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      activity_date TEXT,
+      file_name TEXT,
+      file_path TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS student_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_name TEXT NOT NULL,
+      group_name TEXT NOT NULL,
+      leader_name TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(class_name, group_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS group_score_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_name TEXT NOT NULL,
+      group_name TEXT NOT NULL,
+      activity_name TEXT NOT NULL,
+      score_delta REAL NOT NULL,
+      note TEXT,
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS account_issuance_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_type TEXT NOT NULL,
+      source_module TEXT NOT NULL,
+      operator_user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(operator_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS account_issuance_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      role TEXT NOT NULL,
+      related_name TEXT,
+      student_no TEXT,
+      class_name TEXT,
+      subject_name TEXT,
+      can_download_password INTEGER NOT NULL DEFAULT 1,
+      password_ciphertext TEXT NOT NULL,
+      password_iv TEXT NOT NULL,
+      password_auth_tag TEXT NOT NULL,
+      invalidated_at TEXT,
+      invalidation_reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(batch_id) REFERENCES account_issuance_batches(id) ON DELETE CASCADE,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_account_issuance_batches_created_at
+      ON account_issuance_batches(created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_account_issuance_items_batch_id
+      ON account_issuance_items(batch_id);
+
+    CREATE INDEX IF NOT EXISTS idx_account_issuance_items_user_id
+      ON account_issuance_items(user_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS chat_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -612,64 +718,162 @@ const seedDemoData = (): void => {
     const leaveCount = (db.prepare("SELECT COUNT(*) as count FROM leave_requests").get() as { count: number }).count;
     if (leaveCount < 120) {
         const leaveStmt = db.prepare(
-            `INSERT INTO leave_requests (student_id, parent_user_id, reason, start_date, end_date, status, review_note, reviewed_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO leave_requests (
+                student_id, parent_user_id, requester_user_id, requester_role, leave_type, reason,
+                start_date, end_date, start_at, end_at, contact_phone, emergency_contact,
+                status, parent_confirm_status, review_status, review_note, reviewed_by, reviewed_at,
+                completion_status, completed_at, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
         for (const student of students.slice(0, 140)) {
-            const status = student.id % 6 === 0 ? "pending" : student.id % 2 === 0 ? "approved" : "rejected";
+            const status =
+                student.id % 7 === 0
+                    ? "pending_parent_confirm"
+                    : student.id % 6 === 0
+                        ? "pending_head_teacher_review"
+                        : student.id % 3 === 0
+                            ? "completed"
+                            : student.id % 2 === 0
+                                ? "approved"
+                                : "rejected";
+            const requesterRole = student.id % 4 === 0 ? ROLES.STUDENT : ROLES.PARENT;
+            const requesterUserId = requesterRole === ROLES.STUDENT ? null : (student.parentUserId ?? parentWangId);
             leaveStmt.run(
                 student.id,
                 student.parentUserId ?? parentWangId,
+                requesterUserId,
+                requesterRole,
+                student.id % 3 === 0 ? "sick" : "personal",
                 student.id % 3 === 0 ? "发热居家观察" : "家庭事务请假",
                 dayjs().subtract(student.id % 20, "day").format("YYYY-MM-DD"),
                 dayjs().subtract((student.id % 20) - 1, "day").format("YYYY-MM-DD"),
+                dayjs().subtract(student.id % 20, "day").format("YYYY-MM-DD 08:00"),
+                dayjs().subtract((student.id % 20) - 1, "day").format("YYYY-MM-DD 18:00"),
+                "13800000000",
+                "监护人电话 13800000000",
                 status,
-                status === "approved" ? "请按时返校并提交健康记录" : status === "rejected" ? "请补充医疗凭证" : null,
-                status === "pending" ? null : (student.id % 2 === 0 ? headLiId : teacherZhangId),
+                status === "pending_parent_confirm" ? "pending" : "confirmed",
+                status === "pending_parent_confirm" ? null : status,
+                status === "approved" || status === "completed"
+                    ? "请按时返校并提交健康记录"
+                    : status === "rejected"
+                        ? "请补充医疗凭证"
+                        : status === "pending_parent_confirm"
+                            ? "待家长确认请假信息"
+                            : null,
+                status === "pending_parent_confirm" ? null : (student.id % 2 === 0 ? headLiId : headChenId),
+                status === "pending_parent_confirm" ? null : dayjs().subtract(student.id % 19, "day").toISOString(),
+                status === "completed" ? "completed" : "pending",
+                status === "completed" ? dayjs().subtract(student.id % 18, "day").toISOString() : null,
                 dayjs().subtract(student.id % 20, "day").toISOString()
             );
         }
     }
 
-    const taskCount = (db.prepare("SELECT COUNT(*) as count FROM teaching_tasks").get() as { count: number }).count;
-    if (taskCount < 100) {
-        const taskStmt = db.prepare(
-            `INSERT INTO teaching_tasks (teacher_user_id, title, task_type, status, due_date, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+    const classProfileCount = (db.prepare("SELECT COUNT(*) as count FROM class_profiles").get() as { count: number }).count;
+    if (classProfileCount === 0) {
+        const classes = db.prepare("SELECT DISTINCT class_name as className FROM students ORDER BY class_name").all() as Array<{ className: string }>;
+        const profileStmt = db.prepare(
+            `INSERT INTO class_profiles (
+                class_name, class_motto, class_style, class_slogan, course_schedule,
+                class_rules, seat_map, class_committee, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
-        const taskTypes = ["lesson_plan", "research", "communication", "training"];
-        const statuses = ["todo", "in_progress", "done"];
-        for (let i = 1; i <= 120; i += 1) {
-            const teacherId = i % 3 === 0 ? headLiId : i % 2 === 0 ? teacherWuId : teacherZhangId;
-            taskStmt.run(
-                teacherId,
-                `教研任务 #${i}`,
-                taskTypes[i % taskTypes.length],
-                statuses[i % statuses.length],
-                dayjs().add((i % 35) + 1, "day").format("YYYY-MM-DD"),
-                dayjs().subtract(i % 25, "day").toISOString()
+        for (const item of classes) {
+            profileStmt.run(
+                item.className,
+                "勤学善思，向光而行",
+                "自律、合作、诚信、进取",
+                `${item.className}，一起向前`,
+                "周一至周五：上午文化课，下午活动课/班会",
+                "按时到校；课堂专注；值日到位；文明交流；守护集体荣誉",
+                "前四排按学习小组轮换，后两排按身高与视力动态调整",
+                JSON.stringify([
+                    { position: "班长", name: "王晨" },
+                    { position: "学习委员", name: "李静" },
+                    { position: "纪律委员", name: "张宇" }
+                ]),
+                headLiId,
+                dayjs().toISOString()
             );
         }
     }
 
-    const researchCount = (db.prepare("SELECT COUNT(*) as count FROM teaching_research").get() as { count: number }).count;
-    if (researchCount < 60) {
-        const researchStmt = db.prepare(
-            `INSERT INTO teaching_research (teacher_user_id, title, content, category, performance_score, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+    const classLogCount = (db.prepare("SELECT COUNT(*) as count FROM class_logs").get() as { count: number }).count;
+    if (classLogCount < 80) {
+        const logStmt = db.prepare(
+            `INSERT INTO class_logs (class_name, student_id, student_name, category, title, content, record_date, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
-        const categories = ["教研论文", "课堂改进", "班主任管理", "课程设计"];
-        for (let i = 1; i <= 72; i += 1) {
-            const teacherId = i % 3 === 0 ? headChenId : i % 2 === 0 ? teacherWuId : teacherZhangId;
-            researchStmt.run(
-                teacherId,
-                `教研成果 #${i}`,
-                `围绕第${i}次教学实践形成改进结论：通过分层目标与过程反馈，课堂达成度持续提升。`,
-                categories[i % categories.length],
-                Number((78 + (i % 20) + (i % 5) * 0.6).toFixed(1)),
-                dayjs().subtract(i % 40, "day").toISOString()
+        for (const student of students.slice(0, 120)) {
+            logStmt.run(
+                student.className,
+                student.id,
+                `学生${String(student.id).padStart(4, "0")}`,
+                student.id % 2 === 0 ? "课堂表现" : "班级日常",
+                student.id % 2 === 0 ? "课堂状态记录" : "班级值日记录",
+                student.id % 2 === 0 ? "课堂发言积极，能够主动纠错并帮助同组同学。" : "值日按时完成，能主动维护班级秩序。",
+                dayjs().subtract(student.id % 15, "day").format("YYYY-MM-DD"),
+                student.className.includes("高二") ? headChenId : headLiId,
+                dayjs().subtract(student.id % 15, "day").toISOString()
             );
         }
+    }
+
+    const wellbeingCount = (db.prepare("SELECT COUNT(*) as count FROM wellbeing_posts").get() as { count: number }).count;
+    if (wellbeingCount === 0) {
+        const wellbeingStmt = db.prepare(
+            `INSERT INTO wellbeing_posts (class_name, title, content, attachment_name, attachment_path, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+        );
+        wellbeingStmt.run("高一(1)班", "心灵有约：给自己一点鼓励", "你已经比昨天更靠近目标，允许自己慢一点，但不要停下来。", null, null, headLiId, dayjs().toISOString());
+        wellbeingStmt.run("高二(1)班", "晚自习前的一首小诗", "少年自有青云志，不负黄河万古流。", null, null, headChenId, dayjs().toISOString());
+    }
+
+    const groupCount = (db.prepare("SELECT COUNT(*) as count FROM student_groups").get() as { count: number }).count;
+    if (groupCount === 0) {
+        const groupStmt = db.prepare(
+            `INSERT INTO student_groups (class_name, group_name, leader_name, created_at)
+             VALUES (?, ?, ?, ?)`
+        );
+        ["高一(1)班", "高二(1)班"].forEach((className) => {
+            ["启航组", "追光组", "笃行组", "攀登组"].forEach((groupName, index) => {
+                groupStmt.run(className, groupName, ["王晨", "刘宁", "张宇", "李静"][index], dayjs().toISOString());
+            });
+        });
+    }
+
+    const groupScoreCount = (db.prepare("SELECT COUNT(*) as count FROM group_score_records").get() as { count: number }).count;
+    if (groupScoreCount < 24) {
+        const scoreStmt = db.prepare(
+            `INSERT INTO group_score_records (class_name, group_name, activity_name, score_delta, note, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+        );
+        const activities = ["晨读表现", "卫生评比", "课堂合作", "跑操纪律"];
+        ["高一(1)班", "高二(1)班"].forEach((className, classIndex) => {
+            ["启航组", "追光组", "笃行组", "攀登组"].forEach((groupName, groupIndex) => {
+                scoreStmt.run(
+                    className,
+                    groupName,
+                    activities[(classIndex + groupIndex) % activities.length],
+                    groupIndex % 2 === 0 ? 3 : -1,
+                    groupIndex % 2 === 0 ? "活动参与积极，合作较好。" : "纪律需进一步加强。",
+                    className.includes("高二") ? headChenId : headLiId,
+                    dayjs().subtract(groupIndex + classIndex, "day").toISOString()
+                );
+            });
+        });
+    }
+
+    const galleryCount = (db.prepare("SELECT COUNT(*) as count FROM class_gallery").get() as { count: number }).count;
+    if (galleryCount === 0) {
+        const galleryStmt = db.prepare(
+            `INSERT INTO class_gallery (class_name, title, description, activity_date, file_name, file_path, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        galleryStmt.run("高一(1)班", "主题班会", "围绕“目标与习惯”开展主题班会。", "2026-04-10", null, null, headLiId, dayjs().toISOString());
+        galleryStmt.run("高二(1)班", "春季社会实践", "班级社会实践与合影留念。", "2026-04-12", null, null, headChenId, dayjs().toISOString());
     }
 
     const inviteStmt = db.prepare(
@@ -727,6 +931,32 @@ export const initDatabase = (): void => {
     if (!teacherClassColumns.some((item) => item.name === "subject_name")) {
         db.exec(`ALTER TABLE teacher_class_links ADD COLUMN subject_name TEXT`);
     }
+
+    const leaveColumns = db.prepare(`PRAGMA table_info(leave_requests)`).all() as Array<{ name: string }>;
+    const leaveColumnDefinitions: Record<string, string> = {
+        requester_user_id: `ALTER TABLE leave_requests ADD COLUMN requester_user_id INTEGER`,
+        requester_role: `ALTER TABLE leave_requests ADD COLUMN requester_role TEXT`,
+        leave_type: `ALTER TABLE leave_requests ADD COLUMN leave_type TEXT NOT NULL DEFAULT 'personal'`,
+        start_at: `ALTER TABLE leave_requests ADD COLUMN start_at TEXT`,
+        end_at: `ALTER TABLE leave_requests ADD COLUMN end_at TEXT`,
+        contact_phone: `ALTER TABLE leave_requests ADD COLUMN contact_phone TEXT`,
+        emergency_contact: `ALTER TABLE leave_requests ADD COLUMN emergency_contact TEXT`,
+        parent_confirm_status: `ALTER TABLE leave_requests ADD COLUMN parent_confirm_status TEXT NOT NULL DEFAULT 'pending'`,
+        parent_confirm_note: `ALTER TABLE leave_requests ADD COLUMN parent_confirm_note TEXT`,
+        parent_confirmed_at: `ALTER TABLE leave_requests ADD COLUMN parent_confirmed_at TEXT`,
+        review_status: `ALTER TABLE leave_requests ADD COLUMN review_status TEXT`,
+        reviewed_at: `ALTER TABLE leave_requests ADD COLUMN reviewed_at TEXT`,
+        completion_status: `ALTER TABLE leave_requests ADD COLUMN completion_status TEXT`,
+        completed_at: `ALTER TABLE leave_requests ADD COLUMN completed_at TEXT`
+    };
+    for (const [column, sql] of Object.entries(leaveColumnDefinitions)) {
+        if (!leaveColumns.some((item) => item.name === column)) {
+            db.exec(sql);
+        }
+    }
+
+    db.exec(`DROP TABLE IF EXISTS teaching_tasks`);
+    db.exec(`DROP TABLE IF EXISTS teaching_research`);
 
     db.prepare(
         `UPDATE teacher_class_links
@@ -810,6 +1040,44 @@ export const initDatabase = (): void => {
 
     seedPublicData();
     seedDemoData();
+    repairDatabaseText(db);
+
+    db.prepare(
+        `UPDATE exam_results
+         SET exam_name = '暂无考试数据'
+         WHERE exam_name = '2026学年第一学期期中'`
+    ).run();
+
+    db.prepare(
+        `DELETE FROM exam_results
+         WHERE exam_name = '暂无考试数据'`
+    ).run();
+
+    db.prepare(
+        `UPDATE leave_requests
+         SET requester_user_id = COALESCE(requester_user_id, parent_user_id),
+             requester_role = COALESCE(requester_role, CASE WHEN parent_user_id IS NOT NULL THEN 'parent' ELSE 'student' END),
+             leave_type = COALESCE(NULLIF(leave_type, ''), CASE WHEN reason LIKE '%发热%' OR reason LIKE '%就医%' THEN 'sick' ELSE 'personal' END),
+             start_at = COALESCE(start_at, start_date || ' 08:00'),
+             end_at = COALESCE(end_at, end_date || ' 18:00'),
+             parent_confirm_status = CASE
+                WHEN status = 'pending' THEN 'pending'
+                WHEN status IN ('approved', 'rejected') THEN 'confirmed'
+                ELSE COALESCE(parent_confirm_status, 'pending')
+             END,
+             review_status = CASE
+                WHEN status = 'approved' THEN 'approved'
+                WHEN status = 'rejected' THEN 'rejected'
+                WHEN status = 'pending' THEN 'pending_head_teacher_review'
+                ELSE COALESCE(review_status, status)
+             END,
+             completion_status = CASE
+                WHEN status = 'completed' THEN 'completed'
+                ELSE COALESCE(completion_status, 'pending')
+             END,
+             reviewed_at = COALESCE(reviewed_at, CASE WHEN reviewed_by IS NOT NULL THEN created_at END)
+         WHERE 1 = 1`
+    ).run();
 
     const expireBefore = dayjs().subtract(7, "day").toISOString();
     db.prepare(

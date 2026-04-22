@@ -12,8 +12,10 @@ import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import type { AuthedRequest } from "../types.js";
+import { createIssuanceBatch } from "../utils/accountIssuance.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 import { generateTemporaryPassword, hashPassword } from "../utils/auth.js";
+import { normalizeClassName, normalizeExamName, normalizeName, repairText } from "../utils/text.js";
 
 type SheetRecord = Record<string, unknown>;
 
@@ -24,11 +26,15 @@ type ImportErrorItem = {
 };
 
 type AccountIssueRecord = {
+    userId: number;
     username: string;
     temporaryPassword: string;
     displayName: string;
     role: string;
     relatedName: string;
+    studentNo?: string | null;
+    className?: string | null;
+    subjectName?: string | null;
 };
 
 type ImportSummary = {
@@ -42,6 +48,7 @@ type ImportSummary = {
     accountUpdated: number;
     accountExisting: number;
     issuanceRecords: AccountIssueRecord[];
+    issuanceBatchId?: number | null;
 };
 
 type StudentImportRow = {
@@ -261,7 +268,7 @@ const pickValue = (row: SheetRecord, aliases: string[]): unknown => {
     return undefined;
 };
 
-const toRequiredString = (value: unknown): string => cleanCell(value);
+const toRequiredString = (value: unknown): string => repairText(cleanCell(value));
 
 const toOptionalString = (value: unknown): string | undefined => {
     const text = toRequiredString(value);
@@ -278,9 +285,9 @@ const appendZodErrors = (target: ImportErrorItem[], line: number, error: z.ZodEr
 const parseStudentRow = (row: SheetRecord, line: number, errors: ImportErrorItem[]): StudentImportRow | null => {
     const candidate = {
         studentNo: toRequiredString(pickValue(row, ["studentNo", "student_no", "学号"])),
-        name: toRequiredString(pickValue(row, ["name", "姓名"])),
+        name: normalizeName(pickValue(row, ["name", "姓名"])),
         grade: toRequiredString(pickValue(row, ["grade", "年级"])),
-        className: toRequiredString(pickValue(row, ["className", "class_name", "班级"])),
+        className: normalizeClassName(pickValue(row, ["className", "class_name", "班级"])),
         subjectCombination: toOptionalString(pickValue(row, ["subjectCombination", "subject_combination", "选科组合"])),
         interests: toOptionalString(pickValue(row, ["interests", "兴趣"])),
         careerGoal: toOptionalString(pickValue(row, ["careerGoal", "career_goal", "职业目标"])),
@@ -303,7 +310,7 @@ const parseExamRow = (row: SheetRecord, line: number, errors: ImportErrorItem[])
 
     const candidate = {
         studentNo: toRequiredString(pickValue(row, ["studentNo", "student_no", "学号"])),
-        examName: toRequiredString(pickValue(row, ["examName", "exam_name", "考试名称"])),
+        examName: normalizeExamName(pickValue(row, ["examName", "exam_name", "考试名称"])),
         examDate: toRequiredString(pickValue(row, ["examDate", "exam_date", "考试日期"])),
         subject: toRequiredString(pickValue(row, ["subject", "科目"])),
         score
@@ -342,8 +349,8 @@ const parseTeacherRow = (row: SheetRecord, line: number, errors: ImportErrorItem
 
     const candidate = {
         teacherUsername: toRequiredString(pickValue(row, ["teacherUsername", "teacher_username", "登录账号", "教师账号"])),
-        displayName: toRequiredString(pickValue(row, ["displayName", "teacherName", "name", "教师姓名", "姓名"])),
-        className: toRequiredString(pickValue(row, ["className", "class_name", "班级"])),
+        displayName: normalizeName(pickValue(row, ["displayName", "teacherName", "name", "教师姓名", "姓名"])),
+        className: normalizeClassName(pickValue(row, ["className", "class_name", "班级"])),
         subjectName: toOptionalString(pickValue(row, ["subjectName", "subject_name", "任教学科"]))
     };
 
@@ -401,7 +408,7 @@ const syncStudentAccount = (row: StudentImportRow, studentId: number, summary: I
 
     if (!existing) {
         const temporaryPassword = generateTemporaryPassword();
-        db.prepare(
+        const result = db.prepare(
             `INSERT INTO users (
                 username,
                 display_name,
@@ -423,13 +430,17 @@ const syncStudentAccount = (row: StudentImportRow, studentId: number, summary: I
             dayjs().toISOString(),
             dayjs().toISOString()
         );
+        const userId = Number(result.lastInsertRowid);
 
         summary.issuanceRecords.push({
+            userId,
             username,
             temporaryPassword,
             displayName,
             role: ROLES.STUDENT,
-            relatedName: `${row.name} / ${row.studentNo}`
+            relatedName: `${row.name} / ${row.studentNo}`,
+            studentNo: row.studentNo,
+            className: row.className
         });
         recordAccountSync(summary, "created");
         return;
@@ -490,13 +501,17 @@ const syncTeacherAccount = (row: TeacherImportRow, summary: ImportSummary): numb
             dayjs().toISOString(),
             dayjs().toISOString()
         );
+        const userId = Number(result.lastInsertRowid);
 
         summary.issuanceRecords.push({
+            userId,
             username: row.teacherUsername,
             temporaryPassword,
             displayName,
             role: desiredRole,
-            relatedName: `${displayName} / ${row.className}`
+            relatedName: `${displayName} / ${row.className}`,
+            className: row.className,
+            subjectName: row.subjectName ?? (row.isHeadTeacher === 1 ? "班主任" : "学科待完善")
         });
         recordAccountSync(summary, "created");
         return Number(result.lastInsertRowid);
@@ -643,6 +658,16 @@ dataImportRouter.post("/students", uploadSheet, (req: AuthedRequest, res) => {
     runImport(validRows);
     summary.failed = calcFailedLineCount(summary.errors);
 
+    if (req.user && summary.issuanceRecords.length > 0) {
+        summary.issuanceBatchId = createIssuanceBatch(db, {
+            batchType: "student_import",
+            sourceModule: "data-import",
+            operatorUserId: req.user.id,
+            title: `学生导入账号发放 ${dayjs().format("YYYY-MM-DD HH:mm")}`,
+            items: summary.issuanceRecords
+        });
+    }
+
     if (req.user) {
         logAudit({
             userId: req.user.id,
@@ -712,6 +737,16 @@ dataImportRouter.post("/exam-results", uploadSheet, (req: AuthedRequest, res) =>
 
     runImport(validRows);
     summary.failed = calcFailedLineCount(summary.errors);
+
+    if (req.user && summary.issuanceRecords.length > 0) {
+        summary.issuanceBatchId = createIssuanceBatch(db, {
+            batchType: "teacher_import",
+            sourceModule: "data-import",
+            operatorUserId: req.user.id,
+            title: `教师导入账号发放 ${dayjs().format("YYYY-MM-DD HH:mm")}`,
+            items: summary.issuanceRecords
+        });
+    }
 
     if (req.user) {
         logAudit({
@@ -796,4 +831,100 @@ dataImportRouter.post("/teachers", uploadSheet, (req: AuthedRequest, res) => {
 
     const message = summary.failed > 0 ? `导入完成，${summary.failed} 行失败` : "导入完成";
     res.json({ success: true, message, data: summary });
+});
+
+dataImportRouter.get("/exam-results/manage", (req: AuthedRequest, res) => {
+    const examName = typeof req.query.examName === "string" ? repairText(req.query.examName) : "";
+    const examDate = typeof req.query.examDate === "string" ? req.query.examDate : "";
+
+    let rows = db
+        .prepare(
+            `SELECT er.id, s.student_no as studentNo, s.name as studentName, s.class_name as className,
+                    er.exam_name as examName, er.exam_date as examDate, er.subject, er.score
+             FROM exam_results er
+             JOIN students s ON s.id = er.student_id
+             ORDER BY er.exam_date DESC, er.exam_name DESC, er.id DESC
+             LIMIT 400`
+        )
+        .all() as Array<Record<string, unknown>>;
+
+    if (examName) {
+        rows = rows.filter((item) => String(item.examName).includes(examName));
+    }
+    if (examDate) {
+        rows = rows.filter((item) => String(item.examDate) === examDate);
+    }
+
+    res.json({ success: true, message: "查询成功", data: rows });
+});
+
+dataImportRouter.post("/exam-results/batch-delete", (req: AuthedRequest, res) => {
+    const parsed = z.object({ ids: z.array(z.number().int().positive()).min(1) }).safeParse(req.body);
+    if (!parsed.success || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    db.prepare(`DELETE FROM exam_results WHERE id IN (${parsed.data.ids.map(() => "?").join(",")})`).run(...parsed.data.ids);
+    logAudit({
+        userId: req.user.id,
+        actionModule: "data-import",
+        actionType: "delete_exam_results",
+        objectType: "exam_results",
+        detail: { ids: parsed.data.ids, count: parsed.data.ids.length },
+        ipAddress: extractIp(req)
+    });
+    res.json({ success: true, message: `已删除 ${parsed.data.ids.length} 条成绩记录` });
+});
+
+dataImportRouter.get("/teachers/manage", (req: AuthedRequest, res) => {
+    const rows = db
+        .prepare(
+            `SELECT tcl.id, u.id as teacherUserId, u.username as teacherUsername, u.display_name as displayName,
+                    tcl.class_name as className, tcl.subject_name as subjectName, tcl.is_head_teacher as isHeadTeacher
+             FROM teacher_class_links tcl
+             JOIN users u ON u.id = tcl.teacher_user_id
+             ORDER BY tcl.class_name ASC, u.username ASC`
+        )
+        .all();
+
+    res.json({ success: true, message: "查询成功", data: rows });
+});
+
+dataImportRouter.post("/teachers/batch-delete", (req: AuthedRequest, res) => {
+    const parsed = z.object({ ids: z.array(z.number().int().positive()).min(1) }).safeParse(req.body);
+    if (!parsed.success || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const rows = db
+        .prepare(`SELECT id, teacher_user_id as teacherUserId FROM teacher_class_links WHERE id IN (${parsed.data.ids.map(() => "?").join(",")})`)
+        .all(...parsed.data.ids) as Array<{ id: number; teacherUserId: number }>;
+
+    const transaction = db.transaction((items: Array<{ id: number; teacherUserId: number }>) => {
+        for (const item of items) {
+            db.prepare(`DELETE FROM teacher_class_links WHERE id = ?`).run(item.id);
+            const remaining = db
+                .prepare(`SELECT COUNT(*) as count FROM teacher_class_links WHERE teacher_user_id = ?`)
+                .get(item.teacherUserId) as { count: number };
+            const user = db.prepare(`SELECT role FROM users WHERE id = ?`).get(item.teacherUserId) as { role: string } | undefined;
+            if (remaining.count === 0 && user && user.role !== ROLES.ADMIN) {
+                db.prepare(`DELETE FROM users WHERE id = ?`).run(item.teacherUserId);
+            }
+        }
+    });
+
+    transaction(rows);
+
+    logAudit({
+        userId: req.user.id,
+        actionModule: "data-import",
+        actionType: "delete_teacher_links",
+        objectType: "teacher_class_links",
+        detail: { ids: parsed.data.ids, count: parsed.data.ids.length },
+        ipAddress: extractIp(req)
+    });
+
+    res.json({ success: true, message: `已删除 ${parsed.data.ids.length} 条教师班级关系` });
 });

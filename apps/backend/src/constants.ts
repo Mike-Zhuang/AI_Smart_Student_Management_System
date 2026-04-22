@@ -7,6 +7,7 @@ export const ROLES = {
 } as const;
 
 export type Role = (typeof ROLES)[keyof typeof ROLES];
+export type AiScenario = "career" | "growth" | "home-school" | "general";
 
 export type ModelPricingTier = "free" | "paid";
 
@@ -33,6 +34,16 @@ export const SUPPORTED_MODELS = [
     isDefault: true
   },
   {
+    id: "glm-5",
+    name: "GLM-5",
+    description: "收费基座模型，长上下文与复杂工程任务能力更强，支持思考与结构化输出。",
+    multimodal: false,
+    thinking: true,
+    supportsJsonMode: true,
+    pricingTier: "paid",
+    isDefault: false
+  },
+  {
     id: "glm-5.1",
     name: "GLM-5.1",
     description: "收费文本旗舰模型，适合复杂分析和高质量生成。",
@@ -53,6 +64,26 @@ export const SUPPORTED_MODELS = [
     isDefault: false
   },
   {
+    id: "glm-4.5",
+    name: "GLM-4.5",
+    description: "收费高性能文本模型，适合复杂推理与稳定结构化生成。",
+    multimodal: false,
+    thinking: true,
+    supportsJsonMode: true,
+    pricingTier: "paid",
+    isDefault: false
+  },
+  {
+    id: "glm-4-plus",
+    name: "GLM-4-Plus",
+    description: "收费高性能文本模型，适合高质量通用问答与结构化输出。",
+    multimodal: false,
+    thinking: false,
+    supportsJsonMode: true,
+    pricingTier: "paid",
+    isDefault: false
+  },
+  {
     id: "glm-4.1v-thinking-flash",
     name: "GLM-4.1V-Thinking-Flash",
     description: "免费多模态思考模型，适合图像理解与复杂推理。",
@@ -60,6 +91,16 @@ export const SUPPORTED_MODELS = [
     thinking: true,
     supportsJsonMode: false,
     pricingTier: "free",
+    isDefault: false
+  },
+  {
+    id: "glm-4.5v",
+    name: "GLM-4.5V",
+    description: "收费多模态模型，支持图片、视频、文件理解与深度思考。",
+    multimodal: true,
+    thinking: true,
+    supportsJsonMode: false,
+    pricingTier: "paid",
     isDefault: false
   },
   {

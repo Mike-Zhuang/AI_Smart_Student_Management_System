@@ -26,6 +26,10 @@ const updateSubjectSelectionSchema = z.object({
     thirdSelectedSubject: z.string().nullable().optional()
 });
 
+const batchDeleteSchema = z.object({
+    ids: z.array(z.number().int().positive()).min(1)
+});
+
 studentsRouter.get("/subject-rules", requireAuth, (_req, res) => {
     res.json({
         success: true,
@@ -35,8 +39,8 @@ studentsRouter.get("/subject-rules", requireAuth, (_req, res) => {
             secondarySubjectOptions: SECONDARY_SUBJECT_OPTIONS,
             academicStages: ACADEMIC_STAGE_OPTIONS,
             rules: {
-                lockedStage: "高一上",
-                selectableStages: ["高一下", "高二", "高三"],
+                lockedStage: null,
+                selectableStages: ["高一上", "高一下", "高二", "高三"],
                 stageByGrade: {
                     高一: getAllowedStagesByGrade("高一"),
                     高二: getAllowedStagesByGrade("高二"),
@@ -355,4 +359,64 @@ studentsRouter.delete("/:id", requireAuth, (req: AuthedRequest, res) => {
         message: `学生 ${student.name} 已删除`,
         data: summary
     });
+});
+
+studentsRouter.post("/batch-delete", requireAuth, (req: AuthedRequest, res) => {
+    if (!req.user) {
+        res.status(401).json({ success: false, message: "未登录" });
+        return;
+    }
+
+    const parsed = batchDeleteSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const canDeleteRole = req.user.role === ROLES.ADMIN || req.user.role === ROLES.TEACHER || req.user.role === ROLES.HEAD_TEACHER;
+    if (!canDeleteRole) {
+        res.status(403).json({ success: false, message: "当前角色无权限批量删除学生" });
+        return;
+    }
+
+    const rows = db
+        .prepare(
+            `SELECT id, student_no as studentNo, name
+             FROM students
+             WHERE id IN (${parsed.data.ids.map(() => "?").join(",")})`
+        )
+        .all(...parsed.data.ids) as Array<{ id: number; studentNo: string; name: string }>;
+
+    const forbidden = rows.find((item) => !canAccessStudent(req, item.id));
+    if (forbidden) {
+        res.status(403).json({ success: false, message: `无权删除学生 ${forbidden.name}` });
+        return;
+    }
+
+    const transaction = db.transaction((ids: number[]) => {
+        for (const studentId of ids) {
+            db.prepare(`DELETE FROM exam_results WHERE student_id = ?`).run(studentId);
+            db.prepare(`DELETE FROM behavior_records WHERE student_id = ?`).run(studentId);
+            db.prepare(`DELETE FROM growth_profiles WHERE student_id = ?`).run(studentId);
+            db.prepare(`DELETE FROM alerts WHERE student_id = ?`).run(studentId);
+            db.prepare(`DELETE FROM leave_requests WHERE student_id = ?`).run(studentId);
+            db.prepare(`DELETE FROM career_recommendations WHERE student_id = ?`).run(studentId);
+            db.prepare(`DELETE FROM parent_student_links WHERE student_id = ?`).run(studentId);
+            db.prepare(`DELETE FROM users WHERE linked_student_id = ? AND role = ?`).run(studentId, ROLES.STUDENT);
+            db.prepare(`DELETE FROM students WHERE id = ?`).run(studentId);
+        }
+    });
+
+    transaction(parsed.data.ids);
+
+    logAudit({
+        userId: req.user.id,
+        actionModule: "students",
+        actionType: "student_batch_delete",
+        objectType: "student",
+        detail: { ids: parsed.data.ids, count: parsed.data.ids.length },
+        ipAddress: extractIp(req)
+    });
+
+    res.json({ success: true, message: `已批量删除 ${parsed.data.ids.length} 名学生`, data: { count: parsed.data.ids.length } });
 });
