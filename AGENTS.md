@@ -349,6 +349,17 @@
 - 验证结果：
   - 已执行 `npm run build -w @ms/backend` 与 `npm run build -w @ms/frontend` 通过，待文档更新后一并做全量 `npm run build` 复核。
 
+## 2026-04-22 20:26:30 +0800
+
+- 线上登录 P0 紧急修复：
+  - 定位公网 `http://47.116.199.144:8082/api/auth/login` 失败原因为 Nginx 到后端的反代链路异常，而非账号密码错误。
+  - 排查发现后端服务启动阶段被重维护逻辑拖慢，且 Node 进程仅监听 IPv6，导致 Nginx 代理到 `127.0.0.1:8002` 时出现 `502 Bad Gateway`。
+  - `apps/backend/src/db.ts` 将数据库文本修复改为“启动后后台执行 + 版本标记只跑一次”，避免在 `initDatabase()` 阶段阻塞服务端口监听。
+  - `apps/backend/src/server.ts` 增加 `HOST` 配置并默认监听 `0.0.0.0`，确保线上 IPv4 反代链路稳定可用。
+  - 已重新构建后端、同步 `dist/` 到服务器并重启 `management-system-backend.service`。
+- 验证结果：
+  - 公网 `POST /api/auth/login` 使用 `admin / admin123` 已返回登录成功。
+
 ## 2026-04-22 19:57:12 +0800
 
 - 全局 AI 流式调用链路重构：

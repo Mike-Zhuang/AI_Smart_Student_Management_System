@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { initDatabase } from "./db.js";
+import { initDatabase, runDeferredDatabaseMaintenance } from "./db.js";
 import { simpleRateLimit } from "./middleware/rateLimit.js";
 import { adminRouter } from "./routes/admin.js";
 import { aiRouter } from "./routes/ai.js";
@@ -22,6 +22,7 @@ initDatabase();
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
+const host = process.env.HOST || "0.0.0.0";
 
 app.use(helmet());
 app.use(cors({ origin: true, credentials: true }));
@@ -50,7 +51,8 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   res.status(500).json({ success: false, message });
 });
 
-app.listen(port, () => {
+app.listen(port, host, () => {
   // eslint-disable-next-line no-console
-  console.log(`Backend running at http://localhost:${port}`);
+  console.log(`Backend running at http://${host}:${port}`);
+  runDeferredDatabaseMaintenance();
 });

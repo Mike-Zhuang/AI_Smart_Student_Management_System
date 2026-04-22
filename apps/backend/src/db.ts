@@ -26,6 +26,8 @@ if (!fs.existsSync(dataDir)) {
 export const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 
+const TEXT_REPAIR_VERSION = "2026-04-22-encoding-v2";
+
 const createSchema = (): void => {
     db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -205,6 +207,12 @@ const createSchema = (): void => {
       ip_address TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS app_meta (
+      meta_key TEXT PRIMARY KEY,
+      meta_value TEXT,
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS class_profiles (
@@ -1040,7 +1048,6 @@ export const initDatabase = (): void => {
 
     seedPublicData();
     seedDemoData();
-    repairDatabaseText(db);
 
     db.prepare(
         `UPDATE exam_results
@@ -1087,4 +1094,33 @@ export const initDatabase = (): void => {
          )`
     ).run(expireBefore);
     db.prepare(`DELETE FROM chat_sessions WHERE updated_at < ?`).run(expireBefore);
+};
+
+const getAppMeta = (key: string): string | null => {
+    const row = db.prepare(`SELECT meta_value as metaValue FROM app_meta WHERE meta_key = ?`).get(key) as { metaValue: string | null } | undefined;
+    return row?.metaValue ?? null;
+};
+
+const setAppMeta = (key: string, value: string): void => {
+    db.prepare(
+        `INSERT INTO app_meta (meta_key, meta_value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at = excluded.updated_at`
+    ).run(key, value, dayjs().toISOString());
+};
+
+export const runDeferredDatabaseMaintenance = (): void => {
+    setTimeout(() => {
+        try {
+            const repairedVersion = getAppMeta("text_repair_version");
+            if (repairedVersion === TEXT_REPAIR_VERSION) {
+                return;
+            }
+            // 这里改为启动后后台执行，避免大库启动时阻塞服务监听，优先保证登录与核心 API 可用。
+            repairDatabaseText(db);
+            setAppMeta("text_repair_version", TEXT_REPAIR_VERSION);
+        } catch (error) {
+            console.error("Deferred database maintenance failed:", error);
+        }
+    }, 1000);
 };
