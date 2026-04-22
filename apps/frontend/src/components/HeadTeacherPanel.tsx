@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { createGrid, parseStructuredCommittee, parseStructuredGrid, randomizeSeatGrid, serializeStructuredCommittee, serializeStructuredGrid, updateGridCell, type StructuredCommitteeMember, type StructuredCommitteeValue, type StructuredGridValue } from "../lib/classProfile";
 import { riskLevelLabelMap } from "../lib/labels";
+import { ConfirmActionButton } from "./ConfirmActionButton";
 
 type WorkbenchData = {
     className: string;
@@ -72,11 +74,17 @@ export const HeadTeacherPanel = () => {
         classMotto: "",
         classStyle: "",
         classSlogan: "",
-        courseSchedule: "",
-        classRules: "",
-        seatMap: "",
-        classCommittee: ""
+        classRules: ""
     });
+    const [courseScheduleMode, setCourseScheduleMode] = useState<"grid" | "text">("grid");
+    const [courseScheduleGrid, setCourseScheduleGrid] = useState<StructuredGridValue>(createGrid(5, 7));
+    const [courseScheduleText, setCourseScheduleText] = useState("");
+    const [seatMapMode, setSeatMapMode] = useState<"grid" | "text">("grid");
+    const [seatMapGrid, setSeatMapGrid] = useState<StructuredGridValue>(createGrid(6, 6));
+    const [seatMapText, setSeatMapText] = useState("");
+    const [committeeMode, setCommitteeMode] = useState<"committee" | "text">("committee");
+    const [committeeValue, setCommitteeValue] = useState<StructuredCommitteeValue>({ kind: "committee", members: [] });
+    const [committeeText, setCommitteeText] = useState("");
     const [logForm, setLogForm] = useState({ studentName: "", category: "班级日常", title: "", content: "", recordDate: new Date().toISOString().slice(0, 10) });
     const [wellbeingForm, setWellbeingForm] = useState({ title: "", content: "" });
     const [groupForm, setGroupForm] = useState({ groupName: "", activityName: "", scoreDelta: 1, note: "" });
@@ -105,15 +113,24 @@ export const HeadTeacherPanel = () => {
             setGroupScores(scoreResp.data);
             setGallery(galleryResp.data);
             if (profileResp.data.profile) {
+                const parsedCourseSchedule = parseStructuredGrid(profileResp.data.profile.courseSchedule ?? "");
+                const parsedSeatMap = parseStructuredGrid(profileResp.data.profile.seatMap ?? "");
+                const parsedCommittee = parseStructuredCommittee(profileResp.data.profile.classCommittee ?? "");
                 setProfileForm({
                     classMotto: profileResp.data.profile.classMotto ?? "",
                     classStyle: profileResp.data.profile.classStyle ?? "",
                     classSlogan: profileResp.data.profile.classSlogan ?? "",
-                    courseSchedule: profileResp.data.profile.courseSchedule ?? "",
-                    classRules: profileResp.data.profile.classRules ?? "",
-                    seatMap: profileResp.data.profile.seatMap ?? "",
-                    classCommittee: profileResp.data.profile.classCommittee ?? ""
+                    classRules: profileResp.data.profile.classRules ?? ""
                 });
+                setCourseScheduleMode(parsedCourseSchedule.mode);
+                setCourseScheduleGrid(parsedCourseSchedule.mode === "grid" ? parsedCourseSchedule.value : createGrid(5, 7));
+                setCourseScheduleText(parsedCourseSchedule.mode === "text" ? parsedCourseSchedule.value : "");
+                setSeatMapMode(parsedSeatMap.mode);
+                setSeatMapGrid(parsedSeatMap.mode === "grid" ? parsedSeatMap.value : createGrid(6, 6));
+                setSeatMapText(parsedSeatMap.mode === "text" ? parsedSeatMap.value : "");
+                setCommitteeMode(parsedCommittee.mode);
+                setCommitteeValue(parsedCommittee.mode === "committee" ? parsedCommittee.value : { kind: "committee", members: [] });
+                setCommitteeText(parsedCommittee.mode === "text" ? parsedCommittee.value : "");
             }
         } catch (err) {
             setError(err instanceof Error ? err.message : "加载班级治理数据失败");
@@ -142,7 +159,13 @@ export const HeadTeacherPanel = () => {
         try {
             await apiRequest("/api/head-teacher/class-profile", {
                 method: "PATCH",
-                body: JSON.stringify({ className, ...profileForm })
+                body: JSON.stringify({
+                    className,
+                    ...profileForm,
+                    courseSchedule: serializeStructuredGrid(courseScheduleMode, courseScheduleGrid, courseScheduleText),
+                    seatMap: serializeStructuredGrid(seatMapMode, seatMapGrid, seatMapText),
+                    classCommittee: serializeStructuredCommittee(committeeMode, committeeValue, committeeText)
+                })
             });
             await load(className);
         } catch (err) {
@@ -243,25 +266,20 @@ export const HeadTeacherPanel = () => {
                         <textarea rows={3} value={logForm.content} onChange={(event) => setLogForm((prev) => ({ ...prev, content: event.target.value }))} required />
                     </label>
                     <button className="primary-btn" type="submit">新增日志</button>
-                    <button
-                        className="secondary-btn"
-                        type="button"
+                    <ConfirmActionButton
+                        buttonText={`批量删除日志（${selectedLogIds.length}）`}
+                        confirmTitle="确认批量删除班级日志"
+                        confirmMessage={`确定删除选中的 ${selectedLogIds.length} 条班级日志吗？删除后将无法恢复。`}
                         disabled={selectedLogIds.length === 0}
-                        onClick={async () => {
-                            try {
-                                await apiRequest("/api/head-teacher/class-logs/batch-delete", {
-                                    method: "POST",
-                                    body: JSON.stringify({ ids: selectedLogIds })
-                                });
-                                setSelectedLogIds([]);
-                                await load(className);
-                            } catch (err) {
-                                setError(err instanceof Error ? err.message : "批量删除班级日志失败");
-                            }
+                        onConfirm={async () => {
+                            await apiRequest("/api/head-teacher/class-logs/batch-delete", {
+                                method: "POST",
+                                body: JSON.stringify({ ids: selectedLogIds })
+                            });
+                            setSelectedLogIds([]);
+                            await load(className);
                         }}
-                    >
-                        批量删除日志
-                    </button>
+                    />
                 </form>
                 <div className="table-scroll">
                     <table>
@@ -341,14 +359,15 @@ export const HeadTeacherPanel = () => {
                             <div className="list-item-actions">
                                 {item.attachmentName ? <small>附件：{item.attachmentName}</small> : null}
                                 <small>{new Date(item.createdAt).toLocaleString()}</small>
-                                <button className="secondary-btn" type="button" onClick={async () => {
-                                    try {
+                                <ConfirmActionButton
+                                    buttonText="删除"
+                                    confirmTitle="确认删除心灵驿站内容"
+                                    confirmMessage={`确定删除《${item.title}》吗？`}
+                                    onConfirm={async () => {
                                         await apiRequest(`/api/head-teacher/wellbeing-posts/${item.id}`, { method: "DELETE" });
                                         await load(className);
-                                    } catch (err) {
-                                        setError(err instanceof Error ? err.message : "删除心灵驿站内容失败");
-                                    }
-                                }}>删除</button>
+                                    }}
+                                />
                             </div>
                         </div>
                     ))}
@@ -407,14 +426,15 @@ export const HeadTeacherPanel = () => {
                                     <td>{item.scoreDelta}</td>
                                     <td>{item.note}</td>
                                     <td>
-                                        <button className="secondary-btn" type="button" onClick={async () => {
-                                            try {
+                                        <ConfirmActionButton
+                                            buttonText="删除"
+                                            confirmTitle="确认删除积分记录"
+                                            confirmMessage={`确定删除“小组 ${item.groupName} / ${item.activityName}”这条积分记录吗？`}
+                                            onConfirm={async () => {
                                                 await apiRequest(`/api/head-teacher/group-score-records/${item.id}`, { method: "DELETE" });
                                                 await load(className);
-                                            } catch (err) {
-                                                setError(err instanceof Error ? err.message : "删除积分记录失败");
-                                            }
-                                        }}>删除</button>
+                                            }}
+                                        />
                                     </td>
                                 </tr>
                             ))}
@@ -470,14 +490,15 @@ export const HeadTeacherPanel = () => {
                             <div className="list-item-actions">
                                 {item.fileName ? <small>文件：{item.fileName}</small> : null}
                                 <small>{item.activityDate || "--"}</small>
-                                <button className="secondary-btn" type="button" onClick={async () => {
-                                    try {
+                                <ConfirmActionButton
+                                    buttonText="删除"
+                                    confirmTitle="确认删除班级风采"
+                                    confirmMessage={`确定删除《${item.title}》这条班级风采吗？`}
+                                    onConfirm={async () => {
                                         await apiRequest(`/api/head-teacher/gallery/${item.id}`, { method: "DELETE" });
                                         await load(className);
-                                    } catch (err) {
-                                        setError(err instanceof Error ? err.message : "删除班级风采失败");
-                                    }
-                                }}>删除</button>
+                                    }}
+                                />
                             </div>
                         </div>
                     ))}
@@ -503,7 +524,51 @@ export const HeadTeacherPanel = () => {
                     </div>
                     <label>
                         课程表
-                        <textarea rows={3} value={profileForm.courseSchedule} onChange={(event) => setProfileForm((prev) => ({ ...prev, courseSchedule: event.target.value }))} />
+                        {courseScheduleMode === "grid" ? (
+                            <div className="structured-editor">
+                                <div className="account-actions">
+                                    <label>
+                                        行数
+                                        <input type="number" min={1} max={20} value={courseScheduleGrid.rows} onChange={(event) => setCourseScheduleGrid(createGrid(Number(event.target.value), courseScheduleGrid.cols, courseScheduleGrid.cells))} />
+                                    </label>
+                                    <label>
+                                        列数
+                                        <input type="number" min={1} max={20} value={courseScheduleGrid.cols} onChange={(event) => setCourseScheduleGrid(createGrid(courseScheduleGrid.rows, Number(event.target.value), courseScheduleGrid.cells))} />
+                                    </label>
+                                    <button type="button" className="secondary-btn" onClick={() => setCourseScheduleGrid(createGrid(courseScheduleGrid.rows, courseScheduleGrid.cols))}>
+                                        重新生成表格
+                                    </button>
+                                    <button type="button" className="secondary-btn" onClick={() => setCourseScheduleMode("text")}>
+                                        切换为纯文本
+                                    </button>
+                                </div>
+                                <div className="table-scroll">
+                                    <table>
+                                        <tbody>
+                                            {courseScheduleGrid.cells.map((row, rowIndex) => (
+                                                <tr key={`course-edit-${rowIndex}`}>
+                                                    {row.map((cell, colIndex) => (
+                                                        <td key={`course-edit-${rowIndex}-${colIndex}`}>
+                                                            <input
+                                                                value={cell}
+                                                                onChange={(event) => setCourseScheduleGrid(updateGridCell(courseScheduleGrid, rowIndex, colIndex, event.target.value))}
+                                                            />
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <textarea rows={4} value={courseScheduleText} onChange={(event) => setCourseScheduleText(event.target.value)} />
+                                <button type="button" className="secondary-btn" onClick={() => setCourseScheduleMode("grid")}>
+                                    切换为表格编辑
+                                </button>
+                            </>
+                        )}
                     </label>
                     <label>
                         班级公约
@@ -511,11 +576,151 @@ export const HeadTeacherPanel = () => {
                     </label>
                     <label>
                         座位表
-                        <textarea rows={3} value={profileForm.seatMap} onChange={(event) => setProfileForm((prev) => ({ ...prev, seatMap: event.target.value }))} />
+                        {seatMapMode === "grid" ? (
+                            <div className="structured-editor">
+                                <div className="account-actions">
+                                    <label>
+                                        行数
+                                        <input type="number" min={1} max={20} value={seatMapGrid.rows} onChange={(event) => setSeatMapGrid(createGrid(Number(event.target.value), seatMapGrid.cols, seatMapGrid.cells))} />
+                                    </label>
+                                    <label>
+                                        列数
+                                        <input type="number" min={1} max={20} value={seatMapGrid.cols} onChange={(event) => setSeatMapGrid(createGrid(seatMapGrid.rows, Number(event.target.value), seatMapGrid.cells))} />
+                                    </label>
+                                    <button type="button" className="secondary-btn" onClick={() => setSeatMapGrid(createGrid(seatMapGrid.rows, seatMapGrid.cols))}>
+                                        重新生成表格
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="secondary-btn"
+                                        onClick={() => setSeatMapGrid(randomizeSeatGrid(seatMapGrid, (profileData?.roster ?? []).map((item) => item.name)))}
+                                    >
+                                        随机排座
+                                    </button>
+                                    <button type="button" className="secondary-btn" onClick={() => setSeatMapMode("text")}>
+                                        切换为纯文本
+                                    </button>
+                                </div>
+                                <div className="table-scroll">
+                                    <table>
+                                        <tbody>
+                                            {seatMapGrid.cells.map((row, rowIndex) => (
+                                                <tr key={`seat-edit-${rowIndex}`}>
+                                                    {row.map((cell, colIndex) => (
+                                                        <td key={`seat-edit-${rowIndex}-${colIndex}`}>
+                                                            <input
+                                                                value={cell}
+                                                                onChange={(event) => setSeatMapGrid(updateGridCell(seatMapGrid, rowIndex, colIndex, event.target.value))}
+                                                            />
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <textarea rows={4} value={seatMapText} onChange={(event) => setSeatMapText(event.target.value)} />
+                                <button type="button" className="secondary-btn" onClick={() => setSeatMapMode("grid")}>
+                                    切换为表格编辑
+                                </button>
+                            </>
+                        )}
                     </label>
                     <label>
                         班委会
-                        <textarea rows={3} value={profileForm.classCommittee} onChange={(event) => setProfileForm((prev) => ({ ...prev, classCommittee: event.target.value }))} />
+                        {committeeMode === "committee" ? (
+                            <div className="structured-editor">
+                                <div className="account-actions">
+                                    <button
+                                        type="button"
+                                        className="secondary-btn"
+                                        onClick={() =>
+                                            setCommitteeValue((prev) => ({
+                                                kind: "committee",
+                                                members: [...prev.members, { position: "", name: "" } satisfies StructuredCommitteeMember]
+                                            }))
+                                        }
+                                    >
+                                        新增班委
+                                    </button>
+                                    <button type="button" className="secondary-btn" onClick={() => setCommitteeMode("text")}>
+                                        切换为纯文本
+                                    </button>
+                                </div>
+                                <div className="table-scroll">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>职务</th>
+                                                <th>姓名</th>
+                                                <th>操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {committeeValue.members.map((item, index) => (
+                                                <tr key={`committee-${index}`}>
+                                                    <td>
+                                                        <input
+                                                            value={item.position}
+                                                            onChange={(event) =>
+                                                                setCommitteeValue((prev) => ({
+                                                                    kind: "committee",
+                                                                    members: prev.members.map((member, memberIndex) =>
+                                                                        memberIndex === index ? { ...member, position: event.target.value } : member
+                                                                    )
+                                                                }))
+                                                            }
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        <input
+                                                            value={item.name}
+                                                            onChange={(event) =>
+                                                                setCommitteeValue((prev) => ({
+                                                                    kind: "committee",
+                                                                    members: prev.members.map((member, memberIndex) =>
+                                                                        memberIndex === index ? { ...member, name: event.target.value } : member
+                                                                    )
+                                                                }))
+                                                            }
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        <button
+                                                            type="button"
+                                                            className="secondary-btn"
+                                                            onClick={() =>
+                                                                setCommitteeValue((prev) => ({
+                                                                    kind: "committee",
+                                                                    members: prev.members.filter((_, memberIndex) => memberIndex !== index)
+                                                                }))
+                                                            }
+                                                        >
+                                                            删除
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {committeeValue.members.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={3} className="muted-text">当前未添加班委成员。</td>
+                                                </tr>
+                                            ) : null}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <textarea rows={4} value={committeeText} onChange={(event) => setCommitteeText(event.target.value)} />
+                                <button type="button" className="secondary-btn" onClick={() => setCommitteeMode("committee")}>
+                                    切换为结构化班委表
+                                </button>
+                            </>
+                        )}
                     </label>
                     <button className="primary-btn" type="submit" disabled={saving}>{saving ? "保存中..." : "保存班级简介"}</button>
                 </form>

@@ -56,6 +56,8 @@ export const OrgStructurePanel = () => {
     const [keyword, setKeyword] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
+    const [expandedGrades, setExpandedGrades] = useState<string[]>(["高一", "高二", "高三"]);
+    const [expandedClasses, setExpandedClasses] = useState<string[]>([]);
 
     const load = async () => {
         setLoading(true);
@@ -110,6 +112,15 @@ export const OrgStructurePanel = () => {
             ].some((value) => value.toLowerCase().includes(normalizedKeyword))
         );
     }, [data?.teachers, normalizedKeyword]);
+
+    const groupedClasses = useMemo(() => {
+        const groups = new Map<string, OrgClassNode[]>();
+        filteredClasses.forEach((item) => {
+            const grade = item.students[0]?.grade ?? item.className.match(/高[一二三]/)?.[0] ?? "未分年级";
+            groups.set(grade, [...(groups.get(grade) ?? []), item]);
+        });
+        return Array.from(groups.entries()).sort((left, right) => left[0].localeCompare(right[0], "zh-Hans-CN"));
+    }, [filteredClasses]);
 
     return (
         <section className="panel-grid">
@@ -169,94 +180,148 @@ export const OrgStructurePanel = () => {
             </article>
 
             {viewMode === "class" ? (
-                filteredClasses.length > 0 ? (
-                    filteredClasses.map((item) => (
-                        <article key={item.className} className="panel-card wide org-card">
-                            <div className="list-item-header">
-                                <div>
-                                    <h4>{item.className}</h4>
-                                    <p className="muted-text">学生 {item.studentCount} 人</p>
-                                </div>
-                                <span className="status-pill">{item.headTeachers.length > 0 ? "班主任已配置" : "班主任待完善"}</span>
-                            </div>
-
-                            <div className="org-detail-grid">
-                                <div className="org-subcard">
-                                    <h5>班主任</h5>
-                                    {item.headTeachers.length > 0 ? (
-                                        <ul className="timeline-list">
-                                            {item.headTeachers.map((teacher) => (
-                                                <li key={`${item.className}-${teacher.teacherUserId}`}>
-                                                    {teacher.displayName}
-                                                    {teacher.subjectName ? `（${teacher.subjectName}）` : "（学科待完善）"}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    ) : (
-                                        <p className="muted-text">当前未配置班主任。</p>
-                                    )}
-                                </div>
-
-                                <div className="org-subcard">
-                                    <h5>科任教师</h5>
-                                    {item.teachers.length > 0 ? (
-                                        <div className="table-scroll">
-                                            <table>
-                                                <thead>
-                                                    <tr>
-                                                        <th>教师</th>
-                                                        <th>登录账号</th>
-                                                        <th>任教学科</th>
-                                                        <th>身份标记</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {item.teachers.map((teacher) => (
-                                                        <tr key={`${item.className}-${teacher.teacherUserId}-${teacher.subjectName ?? ""}`}>
-                                                            <td>{teacher.displayName}</td>
-                                                            <td>{teacher.username}</td>
-                                                            <td>{teacher.subjectName ?? "待完善"}</td>
-                                                            <td>{teacher.isHeadTeacher ? "班主任 / 科任" : "科任教师"}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ) : (
-                                        <p className="muted-text">当前未配置科任教师。</p>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="org-subcard">
-                                <h5>学生花名册</h5>
-                                {item.students.length > 0 ? (
-                                    <div className="table-scroll">
-                                        <table>
-                                            <thead>
-                                                <tr>
-                                                    <th>学号</th>
-                                                    <th>姓名</th>
-                                                    <th>年级</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {item.students.map((student) => (
-                                                    <tr key={student.id}>
-                                                        <td>{student.studentNo}</td>
-                                                        <td>{student.name}</td>
-                                                        <td>{student.grade}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                groupedClasses.length > 0 ? (
+                    groupedClasses.map(([grade, items]) => {
+                        const gradeExpanded = expandedGrades.includes(grade);
+                        return (
+                            <article key={grade} className="panel-card wide org-card">
+                                <div className="list-item-header">
+                                    <div>
+                                        <h4>{grade}</h4>
+                                        <p className="muted-text">{items.length} 个班级，合计 {items.reduce((sum, item) => sum + item.studentCount, 0)} 名学生</p>
                                     </div>
-                                ) : (
-                                    <p className="muted-text">当前班级还没有学生数据。</p>
-                                )}
-                            </div>
-                        </article>
-                    ))
+                                    <div className="account-actions">
+                                        <button
+                                            type="button"
+                                            className="secondary-btn"
+                                            onClick={() =>
+                                                setExpandedGrades((prev) => (gradeExpanded ? prev.filter((item) => item !== grade) : [...prev, grade]))
+                                            }
+                                        >
+                                            {gradeExpanded ? "收起年级" : "展开年级"}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="secondary-btn"
+                                            onClick={() =>
+                                                setExpandedClasses((prev) =>
+                                                    Array.from(new Set([...prev, ...items.map((item) => item.className)]))
+                                                )
+                                            }
+                                        >
+                                            展开本年级全部学生
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {gradeExpanded ? items.map((item) => {
+                                    const classExpanded = expandedClasses.includes(item.className);
+                                    return (
+                                        <div key={item.className} className="org-subcard">
+                                            <div className="list-item-header">
+                                                <div>
+                                                    <h5>{item.className}</h5>
+                                                    <p className="muted-text">学生 {item.studentCount} 人</p>
+                                                </div>
+                                                <div className="account-actions">
+                                                    <span className="status-pill">{item.headTeachers.length > 0 ? "班主任已配置" : "班主任待完善"}</span>
+                                                    <button
+                                                        type="button"
+                                                        className="secondary-btn"
+                                                        onClick={() =>
+                                                            setExpandedClasses((prev) =>
+                                                                classExpanded ? prev.filter((target) => target !== item.className) : [...prev, item.className]
+                                                            )
+                                                        }
+                                                    >
+                                                        {classExpanded ? "收起学生" : "展开学生"}
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="org-detail-grid">
+                                                <div className="org-subcard">
+                                                    <h5>班主任</h5>
+                                                    {item.headTeachers.length > 0 ? (
+                                                        <ul className="timeline-list">
+                                                            {item.headTeachers.map((teacher) => (
+                                                                <li key={`${item.className}-${teacher.teacherUserId}`}>
+                                                                    {teacher.displayName}
+                                                                    {teacher.subjectName ? `（${teacher.subjectName}）` : "（学科待完善）"}
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    ) : (
+                                                        <p className="muted-text">当前未配置班主任。</p>
+                                                    )}
+                                                </div>
+
+                                                <div className="org-subcard">
+                                                    <h5>科任教师</h5>
+                                                    {item.teachers.length > 0 ? (
+                                                        <div className="table-scroll">
+                                                            <table>
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th>教师</th>
+                                                                        <th>登录账号</th>
+                                                                        <th>任教学科</th>
+                                                                        <th>身份标记</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {item.teachers.map((teacher) => (
+                                                                        <tr key={`${item.className}-${teacher.teacherUserId}-${teacher.subjectName ?? ""}`}>
+                                                                            <td>{teacher.displayName}</td>
+                                                                            <td>{teacher.username}</td>
+                                                                            <td>{teacher.subjectName ?? "待完善"}</td>
+                                                                            <td>{teacher.isHeadTeacher ? "班主任 / 科任" : "科任教师"}</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="muted-text">当前未配置科任教师。</p>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {classExpanded ? (
+                                                <div className="org-subcard">
+                                                    <h5>学生花名册</h5>
+                                                    {item.students.length > 0 ? (
+                                                        <div className="table-scroll">
+                                                            <table>
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th>学号</th>
+                                                                        <th>姓名</th>
+                                                                        <th>年级</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {item.students.map((student) => (
+                                                                        <tr key={student.id}>
+                                                                            <td>{student.studentNo}</td>
+                                                                            <td>{student.name}</td>
+                                                                            <td>{student.grade}</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="muted-text">当前班级还没有学生数据。</p>
+                                                    )}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    );
+                                }) : null}
+                            </article>
+                        );
+                    })
                 ) : (
                     <article className="panel-card wide">
                         <p className="muted-text">当前搜索条件下暂无班级组织记录。</p>

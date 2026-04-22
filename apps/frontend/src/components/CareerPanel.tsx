@@ -91,6 +91,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
     const [rules, setRules] = useState<SubjectRules | null>(null);
     const [streamingAnswer, setStreamingAnswer] = useState("");
     const [supplementalContext, setSupplementalContext] = useState("");
+    const [streamStatus, setStreamStatus] = useState<"idle" | "connecting" | "streaming" | "finalizing">("idle");
     const [selectionForm, setSelectionForm] = useState({
         academicStage: "高一上",
         firstSelectedSubject: "",
@@ -218,36 +219,75 @@ export const CareerPanel = ({ user }: { user: User }) => {
         const decoder = new TextDecoder();
         let buffer = "";
         let complete: StreamCompletePayload | null = null;
+        let fallbackResult: StreamCompletePayload | null = null;
+        let sawAnyDelta = false;
+
+        const processBlock = (block: string): void => {
+            const lines = block.split(/\r?\n/).filter(Boolean);
+            const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() ?? "message";
+            const dataLines = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim());
+            if (dataLines.length === 0) {
+                return;
+            }
+
+            const parsed = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+            if (event === "delta" && typeof parsed.delta === "string") {
+                sawAnyDelta = true;
+                setStreamStatus("streaming");
+                setStreamingAnswer((prev) => prev + parsed.delta);
+                return;
+            }
+            if (event === "error") {
+                throw new Error(String(parsed.message ?? "生成失败"));
+            }
+            if (event === "complete") {
+                complete = parsed as unknown as StreamCompletePayload;
+                fallbackResult = complete;
+                if (typeof parsed.answer === "string" && parsed.answer.trim()) {
+                    setStreamingAnswer(parsed.answer.trim());
+                }
+                return;
+            }
+            if (event === "conversation" && !sawAnyDelta) {
+                setStreamStatus("connecting");
+            }
+            if (parsed.result && typeof parsed.result === "object") {
+                fallbackResult = parsed as unknown as StreamCompletePayload;
+            }
+        };
+
+        const flushBuffer = (): void => {
+            const matcher = /\r?\n\r?\n/;
+            let matched = buffer.match(matcher);
+            while (matched && matched.index !== undefined) {
+                const block = buffer.slice(0, matched.index);
+                buffer = buffer.slice(matched.index + matched[0].length);
+                processBlock(block);
+                matched = buffer.match(matcher);
+            }
+        };
+
         while (true) {
             const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            let sep = buffer.indexOf("\n\n");
-            while (sep !== -1) {
-                const block = buffer.slice(0, sep);
-                buffer = buffer.slice(sep + 2);
-                const eventLine = block.split(/\r?\n/).find((line) => line.startsWith("event:"));
-                const dataLine = block.split(/\r?\n/).find((line) => line.startsWith("data:"));
-                if (eventLine && dataLine) {
-                    const event = eventLine.slice(6).trim();
-                    const parsed = JSON.parse(dataLine.slice(5).trim()) as Record<string, unknown>;
-                    if (event === "delta" && typeof parsed.delta === "string") {
-                        setStreamingAnswer((prev) => prev + parsed.delta);
-                    }
-                    if (event === "error") {
-                        throw new Error(String(parsed.message ?? "生成失败"));
-                    }
-                    if (event === "complete") {
-                        complete = parsed as unknown as StreamCompletePayload;
-                    }
-                }
-                sep = buffer.indexOf("\n\n");
+            if (done) {
+                break;
             }
+            buffer += decoder.decode(value, { stream: true });
+            flushBuffer();
         }
-        if (!complete) {
-            throw new Error("未收到选科建议完成事件");
+        buffer += decoder.decode();
+        if (buffer.trim()) {
+            processBlock(buffer.trim());
         }
-        return complete;
+        if (complete) {
+            return complete;
+        }
+        const resolvedFallback = fallbackResult;
+        if (resolvedFallback) {
+            setError("技术告警：未收到明确完成事件，系统已按最终结果完成落库。");
+            return resolvedFallback;
+        }
+        throw new Error("未收到选科建议完成事件");
     };
 
     const generate = async () => {
@@ -261,18 +301,24 @@ export const CareerPanel = ({ user }: { user: User }) => {
         setLoading(true);
         setStreamingAnswer("");
         setError("");
+        setStreamStatus("connecting");
         try {
             storage.setApiKey(apiKey.trim());
-            await consumeStream({
+            const complete = await consumeStream({
                 studentId,
                 model,
                 apiKey: apiKey.trim(),
                 supplementalContext
             });
+            setStreamStatus("finalizing");
+            if (complete.result.reasoning && !streamingAnswer.trim()) {
+                setStreamingAnswer(complete.result.reasoning);
+            }
             await loadRecommendations(studentId);
         } catch (err) {
             setError(err instanceof Error ? err.message : "生成选科建议失败");
         } finally {
+            setStreamStatus("idle");
             setLoading(false);
         }
     };
@@ -281,86 +327,110 @@ export const CareerPanel = ({ user }: { user: User }) => {
         <section className="panel-grid">
             <article className="panel-card wide">
                 <h3>生涯发展与选科建议</h3>
-                <div className="inline-form">
-                    <label>
-                        选择学生
-                        <select value={studentId ?? ""} onChange={(event) => setStudentId(Number(event.target.value))}>
-                            {students.map((item) => (
-                                <option key={item.id} value={item.id}>{item.name} / {item.grade} / {item.className}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label>
-                        模型
-                        <select value={model} onChange={(event) => setModel(event.target.value)}>
-                            {models.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                    {item.name} / {item.pricingTier === "paid" ? "收费" : "免费"}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <label>
-                        API Key
-                        <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="请输入可用的 API Key" />
-                    </label>
-                    <button className="primary-btn" onClick={generate} disabled={loading}>
-                        {loading ? "生成中..." : "流式生成选科建议"}
-                    </button>
-                    <button className="secondary-btn" onClick={() => void downloadExport("/api/admin/export/module/career-recommendations", "career-recommendations")}>导出建议记录</button>
-                    <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=career")}>进入 AI 助手</button>
-                </div>
+                <div className="career-workspace">
+                    <div className="career-config-card">
+                        <div className="inline-form">
+                            <label>
+                                选择学生
+                                <select value={studentId ?? ""} onChange={(event) => setStudentId(Number(event.target.value))}>
+                                    {students.map((item) => (
+                                        <option key={item.id} value={item.id}>{item.name} / {item.grade} / {item.className}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label>
+                                模型
+                                <select value={model} onChange={(event) => setModel(event.target.value)}>
+                                    {models.map((item) => (
+                                        <option key={item.id} value={item.id}>
+                                            {item.name} / {item.pricingTier === "paid" ? "收费" : "免费"}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label>
+                                API Key
+                                <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="请输入可用的 API Key" />
+                            </label>
+                        </div>
 
-                <div className="inline-form section-actions">
-                    <label>
-                        学段
-                        <select value={selectionForm.academicStage} onChange={(event) => setSelectionForm((prev) => ({ ...prev, academicStage: event.target.value }))}>
-                            {stageOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                        </select>
-                    </label>
-                    <label>
-                        首选科
-                        <select value={selectionForm.firstSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, firstSelectedSubject: event.target.value }))}>
-                            <option value="">请选择</option>
-                            {(rules?.firstSubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
-                        </select>
-                    </label>
-                    <label>
-                        再选科1
-                        <select value={selectionForm.secondSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, secondSelectedSubject: event.target.value }))}>
-                            <option value="">请选择</option>
-                            {(rules?.secondarySubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
-                        </select>
-                    </label>
-                    <label>
-                        再选科2
-                        <select value={selectionForm.thirdSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, thirdSelectedSubject: event.target.value }))}>
-                            <option value="">请选择</option>
-                            {(rules?.secondarySubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
-                        </select>
-                    </label>
-                    <button className="secondary-btn" onClick={() => void saveSelection()} disabled={selectionSaving}>
-                        {selectionSaving ? "保存中..." : "保存选科确认"}
-                    </button>
-                </div>
+                        <div className="inline-form section-actions">
+                            <label>
+                                学段
+                                <select value={selectionForm.academicStage} onChange={(event) => setSelectionForm((prev) => ({ ...prev, academicStage: event.target.value }))}>
+                                    {stageOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                                </select>
+                            </label>
+                            <label>
+                                首选科
+                                <select value={selectionForm.firstSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, firstSelectedSubject: event.target.value }))}>
+                                    <option value="">请选择</option>
+                                    {(rules?.firstSubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
+                                </select>
+                            </label>
+                            <label>
+                                再选科1
+                                <select value={selectionForm.secondSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, secondSelectedSubject: event.target.value }))}>
+                                    <option value="">请选择</option>
+                                    {(rules?.secondarySubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
+                                </select>
+                            </label>
+                            <label>
+                                再选科2
+                                <select value={selectionForm.thirdSelectedSubject} onChange={(event) => setSelectionForm((prev) => ({ ...prev, thirdSelectedSubject: event.target.value }))}>
+                                    <option value="">请选择</option>
+                                    {(rules?.secondarySubjectOptions ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
+                                </select>
+                            </label>
+                        </div>
 
-                <label>
-                    自由补充信息
-                    <textarea
-                        rows={4}
-                        value={supplementalContext}
-                        onChange={(event) => setSupplementalContext(event.target.value)}
-                        placeholder="可补充家庭期望、兴趣变化、竞赛经历、老师观察、身体情况等，大模型会结合成绩一起判断。"
-                    />
-                </label>
-                <p className="muted-text">
-                    当前学生：{selectedStudent?.subjectCombination ?? "暂无组合"} / {selectionStatusLabelMap[selectedStudent?.selectionStatus ?? "not_started"] ?? "待完善"}
-                </p>
+                        <div className="account-actions section-actions">
+                            <button className="primary-btn" onClick={generate} disabled={loading}>
+                                {loading ? "生成中..." : "流式生成选科建议"}
+                            </button>
+                            <button className="secondary-btn" onClick={() => void saveSelection()} disabled={selectionSaving}>
+                                {selectionSaving ? "保存中..." : "保存选科确认"}
+                            </button>
+                            <button className="secondary-btn" onClick={() => void downloadExport("/api/admin/export/module/career-recommendations", "career-recommendations")}>导出建议记录</button>
+                            <button className="secondary-btn" onClick={() => navigate("/dashboard/ai-lab?scenario=career")}>进入 AI 助手</button>
+                        </div>
+
+                        <p className="muted-text">
+                            当前学生：{selectedStudent?.subjectCombination ?? "暂无组合"} / {selectionStatusLabelMap[selectedStudent?.selectionStatus ?? "not_started"] ?? "待完善"}
+                        </p>
+                    </div>
+
+                    <div className="career-supplement-card">
+                        <div className="list-item-header">
+                            <div>
+                                <h4>自由补充信息</h4>
+                                <p className="muted-text">把家庭期望、兴趣变化、老师观察、竞赛经历、身体情况等补充给模型，系统会与成绩一起综合判断。</p>
+                            </div>
+                            <strong>{supplementalContext.trim().length} 字</strong>
+                        </div>
+                        <div className="account-actions">
+                            {["家庭期望", "兴趣变化", "老师观察", "竞赛经历", "身体情况"].map((item) => (
+                                <span key={item} className="status-pill">{item}</span>
+                            ))}
+                        </div>
+                        <textarea
+                            className="career-supplement-input"
+                            rows={10}
+                            value={supplementalContext}
+                            onChange={(event) => setSupplementalContext(event.target.value)}
+                            placeholder="例如：学生最近对理工类专业兴趣明显提升；数学、物理成绩稳定，英语波动较大；家长更倾向未来报考工科院校；班主任观察到其做实验和解决问题时专注度较高。"
+                        />
+                        {!supplementalContext.trim() ? <p className="muted-text">当前未补充额外背景，模型将仅结合成绩、现有选科状态和兴趣目标生成建议。</p> : null}
+                    </div>
+                </div>
             </article>
 
             {(loading || streamingAnswer) ? (
                 <article className="panel-card wide">
                     <h4>生成中的选科建议</h4>
+                    <p className="muted-text">
+                        {streamStatus === "connecting" ? "正在连接模型..." : streamStatus === "streaming" ? "模型正在流式生成中..." : streamStatus === "finalizing" ? "正在整理最终结果并刷新历史..." : "等待开始"}
+                    </p>
                     <pre className="answer-box">{streamingAnswer || "模型正在综合分析成绩、兴趣和补充背景..."}</pre>
                 </article>
             ) : null}

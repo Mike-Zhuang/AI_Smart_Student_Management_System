@@ -1,0 +1,143 @@
+import { Router } from "express";
+import { ROLES } from "../constants.js";
+import { db } from "../db.js";
+import { requireAuth } from "../middleware/auth.js";
+import type { AuthedRequest } from "../types.js";
+import { normalizeClassName, repairRecordStrings } from "../utils/text.js";
+
+export const classSpaceRouter = Router();
+
+type AvailableClassOption = {
+    className: string;
+    label: string;
+};
+
+const getAccessibleClasses = (req: AuthedRequest): AvailableClassOption[] => {
+    if (!req.user) {
+        return [];
+    }
+
+    if (req.user.role === ROLES.ADMIN) {
+        return (db.prepare(`SELECT DISTINCT class_name as className FROM students ORDER BY class_name ASC`).all() as Array<{ className: string }>)
+            .map((item) => ({ className: item.className, label: item.className }));
+    }
+
+    if (req.user.role === ROLES.TEACHER || req.user.role === ROLES.HEAD_TEACHER) {
+        return (db.prepare(
+            `SELECT DISTINCT class_name as className
+             FROM teacher_class_links
+             WHERE teacher_user_id = ?
+             ORDER BY class_name ASC`
+        ).all(req.user.id) as Array<{ className: string }>)
+            .map((item) => ({ className: item.className, label: item.className }));
+    }
+
+    if (req.user.role === ROLES.PARENT) {
+        const rows = db.prepare(
+            `SELECT DISTINCT s.class_name as className, s.name
+             FROM parent_student_links psl
+             JOIN students s ON s.id = psl.student_id
+             WHERE psl.parent_user_id = ?
+             ORDER BY s.class_name ASC, s.name ASC`
+        ).all(req.user.id) as Array<{ className: string; name: string }>;
+
+        const grouped = new Map<string, string[]>();
+        rows.forEach((item) => {
+            const current = grouped.get(item.className) ?? [];
+            current.push(item.name);
+            grouped.set(item.className, current);
+        });
+
+        return Array.from(grouped.entries()).map(([className, names]) => ({
+            className,
+            label: `${className}（${names.join("、")}）`
+        }));
+    }
+
+    if (req.user.role === ROLES.STUDENT && req.user.linkedStudentId) {
+        const row = db.prepare(
+            `SELECT class_name as className
+             FROM students
+             WHERE id = ?`
+        ).get(req.user.linkedStudentId) as { className: string } | undefined;
+        return row ? [{ className: row.className, label: row.className }] : [];
+    }
+
+    return [];
+};
+
+const canAccessClass = (req: AuthedRequest, className: string): boolean => {
+    const normalized = normalizeClassName(className);
+    return getAccessibleClasses(req).some((item) => normalizeClassName(item.className) === normalized);
+};
+
+classSpaceRouter.use(requireAuth);
+
+classSpaceRouter.get("/overview", (req: AuthedRequest, res) => {
+    const availableClasses = getAccessibleClasses(req);
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: {
+            availableClasses,
+            defaultClassName: availableClasses[0]?.className ?? ""
+        }
+    });
+});
+
+classSpaceRouter.get("/detail", (req: AuthedRequest, res) => {
+    const requestedClassName = typeof req.query.className === "string" ? req.query.className : "";
+    const className = normalizeClassName(requestedClassName || getAccessibleClasses(req)[0]?.className || "");
+
+    if (!className) {
+        res.status(404).json({ success: false, message: "当前账号暂无可查看的班级信息" });
+        return;
+    }
+
+    if (!canAccessClass(req, className)) {
+        res.status(403).json({ success: false, message: "无权查看该班级信息" });
+        return;
+    }
+
+    const profile = db.prepare(
+        `SELECT class_name as className, class_motto as classMotto, class_style as classStyle,
+                class_slogan as classSlogan, course_schedule as courseSchedule,
+                class_rules as classRules, seat_map as seatMap, class_committee as classCommittee,
+                updated_at as updatedAt
+         FROM class_profiles
+         WHERE class_name = ?`
+    ).get(className) as Record<string, unknown> | undefined;
+
+    const roster = (db.prepare(
+        `SELECT id, student_no as studentNo, name, grade, class_name as className
+         FROM students
+         WHERE class_name = ?
+         ORDER BY student_no ASC, id ASC`
+    ).all(className) as Array<Record<string, unknown>>).map((item) => repairRecordStrings(item));
+
+    const wellbeingPosts = (db.prepare(
+        `SELECT id, title, content, attachment_name as attachmentName, created_at as createdAt
+         FROM wellbeing_posts
+         WHERE class_name = ?
+         ORDER BY id DESC`
+    ).all(className) as Array<Record<string, unknown>>).map((item) => repairRecordStrings(item));
+
+    const gallery = (db.prepare(
+        `SELECT id, title, description, activity_date as activityDate, file_name as fileName, created_at as createdAt
+         FROM class_gallery
+         WHERE class_name = ?
+         ORDER BY id DESC`
+    ).all(className) as Array<Record<string, unknown>>).map((item) => repairRecordStrings(item));
+
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: {
+            className,
+            profile: profile ? repairRecordStrings(profile) : null,
+            roster,
+            wellbeingPosts,
+            gallery
+        }
+    });
+});

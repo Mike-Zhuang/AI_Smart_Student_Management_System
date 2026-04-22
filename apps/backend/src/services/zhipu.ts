@@ -360,13 +360,13 @@ export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHan
         let reasoning = "";
         let buffer = "";
 
-        for await (const chunk of stream) {
-            buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-
-            let separatorIndex = buffer.indexOf("\n\n");
-            while (separatorIndex !== -1) {
+        const parseBuffer = (): void => {
+            const matcher = /\r?\n\r?\n/;
+            let separatorMatch = buffer.match(matcher);
+            while (separatorMatch && separatorMatch.index !== undefined) {
+                const separatorIndex = separatorMatch.index;
                 const block = buffer.slice(0, separatorIndex);
-                buffer = buffer.slice(separatorIndex + 2);
+                buffer = buffer.slice(separatorIndex + separatorMatch[0].length);
 
                 const dataLines = block
                     .split(/\r?\n/)
@@ -374,61 +374,59 @@ export const streamZhipu = async (payload: ChatPayload, handlers: ZhipuStreamHan
                     .map((line) => line.slice(5).trim())
                     .filter((line) => line.length > 0);
 
-                if (dataLines.length === 0) {
-                    separatorIndex = buffer.indexOf("\n\n");
-                    continue;
-                }
-
-                const payloadLine = dataLines.join("");
-                if (payloadLine === "[DONE]") {
-                    separatorIndex = buffer.indexOf("\n\n");
-                    continue;
-                }
-
-                try {
-                    const parsed = JSON.parse(payloadLine) as {
-                        choices?: Array<{
-                            delta?: {
-                                content?: unknown;
-                                reasoning_content?: unknown;
-                                reasoning?: unknown;
-                                thinking?: unknown;
+                if (dataLines.length > 0) {
+                    const payloadLine = dataLines.join("");
+                    if (payloadLine !== "[DONE]") {
+                        try {
+                            const parsed = JSON.parse(payloadLine) as {
+                                choices?: Array<{
+                                    delta?: {
+                                        content?: unknown;
+                                        reasoning_content?: unknown;
+                                        reasoning?: unknown;
+                                        thinking?: unknown;
+                                    };
+                                    message?: {
+                                        content?: unknown;
+                                        reasoning_content?: unknown;
+                                        reasoning?: unknown;
+                                        thinking?: unknown;
+                                    };
+                                }>;
                             };
-                            message?: {
-                                content?: unknown;
-                                reasoning_content?: unknown;
-                                reasoning?: unknown;
-                                thinking?: unknown;
-                            };
-                        }>;
-                    };
 
-                    const choice = parsed.choices?.[0];
-                    const delta = choice?.delta ?? choice?.message;
-                    if (!delta) {
-                        separatorIndex = buffer.indexOf("\n\n");
-                        continue;
+                            const choice = parsed.choices?.[0];
+                            const delta = choice?.delta ?? choice?.message;
+                            if (delta) {
+                                const textDelta = normalizeTextChunk(delta.content);
+                                const reasoningDelta = normalizeTextChunk(delta.reasoning_content ?? delta.reasoning ?? delta.thinking);
+
+                                if (textDelta.length > 0) {
+                                    content += textDelta;
+                                    handlers.onTextDelta?.(textDelta);
+                                }
+
+                                if (reasoningDelta.length > 0) {
+                                    reasoning += reasoningDelta;
+                                    handlers.onReasoningDelta?.(reasoningDelta);
+                                }
+                            }
+                        } catch {
+                            // 忽略非JSON事件块
+                        }
                     }
-
-                    const textDelta = normalizeTextChunk(delta.content);
-                    const reasoningDelta = normalizeTextChunk(delta.reasoning_content ?? delta.reasoning ?? delta.thinking);
-
-                    if (textDelta.length > 0) {
-                        content += textDelta;
-                        handlers.onTextDelta?.(textDelta);
-                    }
-
-                    if (reasoningDelta.length > 0) {
-                        reasoning += reasoningDelta;
-                        handlers.onReasoningDelta?.(reasoningDelta);
-                    }
-                } catch {
-                    // 忽略非JSON事件块
                 }
 
-                separatorIndex = buffer.indexOf("\n\n");
+                separatorMatch = buffer.match(matcher);
             }
+        };
+
+        for await (const chunk of stream) {
+            buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+            parseBuffer();
         }
+
+        parseBuffer();
 
         const normalizedContent = content.trim();
         const normalizedReasoning = reasoning.trim();

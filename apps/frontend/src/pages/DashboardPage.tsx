@@ -4,6 +4,7 @@ import { AppShell } from "../components/AppShell";
 import { AccountPanel } from "../components/AccountPanel";
 import { AiLabPanel } from "../components/AiLabPanel";
 import { CareerPanel } from "../components/CareerPanel";
+import { ClassSpacePanel } from "../components/ClassSpacePanel";
 import { DataImportPanel } from "../components/DataImportPanel";
 import { GrowthPanel } from "../components/GrowthPanel";
 import { HeadTeacherPanel } from "../components/HeadTeacherPanel";
@@ -13,10 +14,11 @@ import { OverviewPanel } from "../components/OverviewPanel";
 import { useAuth } from "../App";
 import type { User } from "../lib/types";
 
-const ALLOWED = ["overview", "home-school", "career", "growth", "head-teacher", "org-structure", "ai-lab", "account", "data-import"];
+const ALLOWED = ["overview", "class-space", "home-school", "career", "growth", "head-teacher", "org-structure", "ai-lab", "account", "data-import"];
 
 const SECTION_ROLES: Record<string, User["role"][]> = {
     overview: ["admin", "teacher", "head_teacher", "parent", "student"],
+    "class-space": ["admin", "teacher", "head_teacher", "parent", "student"],
     "home-school": ["admin", "teacher", "head_teacher", "parent", "student"],
     career: ["admin", "teacher", "head_teacher", "parent", "student"],
     growth: ["admin", "teacher", "head_teacher", "parent", "student"],
@@ -30,10 +32,16 @@ const SECTION_ROLES: Record<string, User["role"][]> = {
 export const DashboardPage = () => {
     const { user, setUser } = useAuth();
     const params = useParams<{ section?: string }>();
-    const section = params.section ?? "overview";
+    const section = params.section ?? "";
+
+    if (!section) {
+        return <Navigate to="/dashboard/overview" replace />;
+    }
 
     const content = useMemo(() => {
         switch (section) {
+            case "class-space":
+                return <ClassSpacePanel />;
             case "home-school":
                 return <HomeSchoolPanel user={user!} />;
             case "career":

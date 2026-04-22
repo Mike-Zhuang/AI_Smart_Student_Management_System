@@ -60,11 +60,20 @@ type IssuedAccountRow = {
     className?: string | null;
     teacherClasses?: string | null;
     teacherSubjects?: string | null;
+    parentStudents?: string | null;
     latestIssuanceItemId?: number | null;
     latestIssuanceBatchId?: number | null;
     latestIssuanceAt?: string | null;
     latestIssuanceTitle?: string | null;
     canDownloadPassword?: boolean | number | null;
+};
+
+type StudentOption = {
+    id: number;
+    studentNo: string;
+    name: string;
+    grade: string;
+    className: string;
 };
 
 type IssuanceBatch = {
@@ -116,6 +125,14 @@ export const AccountPanel = () => {
     const [roleFilter, setRoleFilter] = useState<"all" | User["role"]>("all");
     const [onlyPendingChange, setOnlyPendingChange] = useState(false);
     const [onlyDownloadable, setOnlyDownloadable] = useState(false);
+    const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
+    const [parentForm, setParentForm] = useState({
+        studentId: 0,
+        displayName: "",
+        relation: "监护人",
+        phone: "",
+        username: ""
+    });
     const [profileForm, setProfileForm] = useState({
         displayName: "",
         phone: "",
@@ -129,6 +146,13 @@ export const AccountPanel = () => {
     const [loading, setLoading] = useState(false);
     const [passwordLoading, setPasswordLoading] = useState(false);
     const [batchDownloading, setBatchDownloading] = useState(false);
+    const [parentSubmitting, setParentSubmitting] = useState(false);
+    const [batchGeneratingParents, setBatchGeneratingParents] = useState(false);
+    const [resetDownloadInfo, setResetDownloadInfo] = useState<{
+        batchId: number;
+        batchTitle: string;
+        username: string;
+    } | null>(null);
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
 
@@ -145,12 +169,18 @@ export const AccountPanel = () => {
         });
 
         if (["admin", "teacher", "head_teacher"].includes(user?.role ?? response.data.user.role)) {
-            const [issuedResponse, batchResponse] = await Promise.all([
+            const [issuedResponse, batchResponse, studentsResponse] = await Promise.all([
                 apiRequest<IssuedAccountRow[]>("/api/auth/accounts"),
-                apiRequest<IssuanceBatch[]>("/api/auth/account-issuance-batches")
+                apiRequest<IssuanceBatch[]>("/api/auth/account-issuance-batches"),
+                apiRequest<StudentOption[]>("/api/students")
             ]);
             setIssuedAccounts(issuedResponse.data);
             setBatches(batchResponse.data);
+            setStudentOptions(studentsResponse.data);
+            setParentForm((prev) => ({
+                ...prev,
+                studentId: prev.studentId || studentsResponse.data[0]?.id || 0
+            }));
 
             const routeBatchId = Number(searchParams.get("batchId") ?? "");
             const nextBatchId = Number.isNaN(routeBatchId) || routeBatchId <= 0
@@ -160,6 +190,7 @@ export const AccountPanel = () => {
         } else {
             setIssuedAccounts([]);
             setBatches([]);
+            setStudentOptions([]);
             setSelectedBatchId(null);
         }
     };
@@ -225,7 +256,8 @@ export const AccountPanel = () => {
                     item.studentNo,
                     item.className,
                     item.teacherClasses,
-                    item.teacherSubjects
+                    item.teacherSubjects,
+                    item.parentStudents
                 ].some((value) => String(value ?? "").toLowerCase().includes(keyword));
             })
             .sort((left, right) => {
@@ -249,6 +281,9 @@ export const AccountPanel = () => {
         }
         if (item.teacherClasses) {
             return `${item.teacherClasses}${item.teacherSubjects ? ` / ${item.teacherSubjects}` : ""}`;
+        }
+        if (item.parentStudents) {
+            return item.parentStudents;
         }
         return item.className ?? "--";
     };
@@ -306,6 +341,79 @@ export const AccountPanel = () => {
             setError(err instanceof Error ? err.message : "下载批次账号失败");
         } finally {
             setBatchDownloading(false);
+        }
+    };
+
+    const createParentAccount = async (event: FormEvent) => {
+        event.preventDefault();
+        if (!parentForm.studentId) {
+            setError("请先选择学生");
+            return;
+        }
+
+        setParentSubmitting(true);
+        setError("");
+        setSuccess("");
+        try {
+            const response = await apiRequest<{ issuanceBatchId: number | null; username: string }>(
+                "/api/auth/parent-accounts",
+                {
+                    method: "POST",
+                    body: JSON.stringify({
+                        studentId: parentForm.studentId,
+                        displayName: parentForm.displayName.trim(),
+                        relation: parentForm.relation.trim(),
+                        phone: parentForm.phone.trim(),
+                        username: parentForm.username.trim()
+                    })
+                }
+            );
+            setSuccess(`家长账号 ${response.data.username} 已创建并加入发放批次。`);
+            setParentForm((prev) => ({
+                ...prev,
+                displayName: "",
+                relation: "监护人",
+                phone: "",
+                username: ""
+            }));
+            if (response.data.issuanceBatchId) {
+                setResetDownloadInfo({
+                    batchId: response.data.issuanceBatchId,
+                    batchTitle: `家长账号发放`,
+                    username: response.data.username
+                });
+            }
+            await load();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "创建家长账号失败");
+        } finally {
+            setParentSubmitting(false);
+        }
+    };
+
+    const batchGenerateParents = async () => {
+        setBatchGeneratingParents(true);
+        setError("");
+        setSuccess("");
+        try {
+            const response = await apiRequest<{ count: number; issuanceBatchIds: number[] }>("/api/auth/parent-accounts/batch-generate", {
+                method: "POST",
+                body: JSON.stringify({})
+            });
+            setSuccess(response.message);
+            await load();
+            const latestBatchId =
+                response.data.issuanceBatchIds.length > 0
+                    ? response.data.issuanceBatchIds[response.data.issuanceBatchIds.length - 1]
+                    : undefined;
+            if (latestBatchId) {
+                setSelectedBatchId(latestBatchId);
+                setSearchParams({ batchId: String(latestBatchId) });
+            }
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "补齐主家长账号失败");
+        } finally {
+            setBatchGeneratingParents(false);
         }
     };
 
@@ -504,6 +612,52 @@ export const AccountPanel = () => {
             {canManageIssuedAccounts ? (
                 <>
                     <article className="panel-card wide">
+                        <h4>家长账号管理</h4>
+                        <p>系统会在学生导入时自动生成主家长账号。若还有未补齐的学生，可一键补齐；也可以为同一学生追加第 2、第 3 个家长账号。</p>
+                        <div className="account-actions section-actions">
+                            <button
+                                type="button"
+                                className="secondary-btn"
+                                disabled={batchGeneratingParents}
+                                onClick={() => void batchGenerateParents()}
+                            >
+                                {batchGeneratingParents ? "补齐中..." : "一键补齐缺失主家长账号"}
+                            </button>
+                        </div>
+                        <form className="inline-form section-actions" onSubmit={createParentAccount}>
+                            <label>
+                                绑定学生
+                                <select value={parentForm.studentId} onChange={(event) => setParentForm((prev) => ({ ...prev, studentId: Number(event.target.value) }))}>
+                                    {studentOptions.map((item) => (
+                                        <option key={item.id} value={item.id}>
+                                            {item.name} / {item.studentNo} / {item.className}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label>
+                                家长姓名
+                                <input value={parentForm.displayName} onChange={(event) => setParentForm((prev) => ({ ...prev, displayName: event.target.value }))} required />
+                            </label>
+                            <label>
+                                关系
+                                <input value={parentForm.relation} onChange={(event) => setParentForm((prev) => ({ ...prev, relation: event.target.value }))} placeholder="如：父亲、母亲、监护人" required />
+                            </label>
+                            <label>
+                                手机号
+                                <input value={parentForm.phone} onChange={(event) => setParentForm((prev) => ({ ...prev, phone: event.target.value }))} placeholder="选填" />
+                            </label>
+                            <label>
+                                登录账号
+                                <input value={parentForm.username} onChange={(event) => setParentForm((prev) => ({ ...prev, username: event.target.value }))} placeholder="选填，不填则自动生成" />
+                            </label>
+                            <button className="primary-btn" type="submit" disabled={parentSubmitting || studentOptions.length === 0}>
+                                {parentSubmitting ? "创建中..." : "追加家长账号"}
+                            </button>
+                        </form>
+                    </article>
+
+                    <article className="panel-card wide">
                         <h4>账号发放台账</h4>
                         <p>说明：登录账号就是登录页输入框里要填写的用户名；一次性密码只在“用户尚未改密”期间可再次下载。一旦用户自行改密，历史原密码会自动失效。</p>
                         <p className="muted-text">如需再次发放密码，可直接“重置密码”，系统会自动生成新的发放批次。</p>
@@ -602,13 +756,18 @@ export const AccountPanel = () => {
                                                             try {
                                                                 setError("");
                                                                 setSuccess("");
-                                                                const response = await apiRequest<{ issuanceBatchId: number | null; username: string }>(
+                                                                const response = await apiRequest<{ issuanceBatchId: number | null; username: string; batchTitle?: string }>(
                                                                     `/api/auth/accounts/${item.id}/reset-password`,
                                                                     { method: "POST" }
                                                                 );
-                                                                setSuccess(`已为账号 ${response.data.username} 生成新的重置批次，请到下方“账号发放批次记录”中下载新密码。`);
+                                                                setSuccess(`已为账号 ${response.data.username} 生成新的重置批次。`);
                                                                 await load();
                                                                 if (response.data.issuanceBatchId) {
+                                                                    setResetDownloadInfo({
+                                                                        batchId: response.data.issuanceBatchId,
+                                                                        batchTitle: response.data.batchTitle ?? `账号 ${response.data.username} 重置密码`,
+                                                                        username: response.data.username
+                                                                    });
                                                                     setSelectedBatchId(response.data.issuanceBatchId);
                                                                     setSearchParams({ batchId: String(response.data.issuanceBatchId) });
                                                                 }
@@ -763,6 +922,42 @@ export const AccountPanel = () => {
 
             {error ? <p className="error-text">{error}</p> : null}
             {success ? <p className="success-text">{success}</p> : null}
+            {resetDownloadInfo ? (
+                <div className="confirm-modal-backdrop" role="presentation">
+                    <div className="confirm-modal">
+                        <h4>新密码已生成</h4>
+                        <p>账号 {resetDownloadInfo.username} 的一次性新密码已经进入发放批次。你现在就可以直接下载，不需要再滚动到页面下方寻找。</p>
+                        <div className="account-actions">
+                            <button type="button" className="secondary-btn" onClick={() => setResetDownloadInfo(null)}>
+                                稍后处理
+                            </button>
+                            <button
+                                type="button"
+                                className="secondary-btn"
+                                onClick={() => {
+                                    setSelectedBatchId(resetDownloadInfo.batchId);
+                                    setSearchParams({ batchId: String(resetDownloadInfo.batchId) });
+                                    setResetDownloadInfo(null);
+                                }}
+                            >
+                                查看批次明细
+                            </button>
+                            <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={async () => {
+                                    await downloadWholeBatch(resetDownloadInfo.batchId, resetDownloadInfo.batchTitle);
+                                    setSelectedBatchId(resetDownloadInfo.batchId);
+                                    setSearchParams({ batchId: String(resetDownloadInfo.batchId) });
+                                    setResetDownloadInfo(null);
+                                }}
+                            >
+                                立即下载新密码
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </section>
     );
 };

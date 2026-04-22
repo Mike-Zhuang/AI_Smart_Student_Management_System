@@ -3,7 +3,7 @@ import dayjs from "dayjs";
 import { z } from "zod";
 import { db } from "../db.js";
 import { ROLES } from "../constants.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { canAccessStudent, requireAuth, requireRole } from "../middleware/auth.js";
 import {
     buildIssuanceWorkbookBuffer,
     createIssuanceBatch,
@@ -40,6 +40,18 @@ const changePasswordSchema = z.object({
 
 const selectedIssuanceItemsSchema = z.object({
     itemIds: z.array(z.number().int().positive()).min(1)
+});
+
+const createParentAccountSchema = z.object({
+    studentId: z.number().int().positive(),
+    displayName: z.string().min(2).max(40),
+    relation: z.string().min(2).max(20).default("监护人"),
+    phone: z.string().max(30).optional(),
+    username: z.string().min(4).max(40).optional()
+});
+
+const batchGenerateParentSchema = z.object({
+    studentIds: z.array(z.number().int().positive()).optional()
 });
 
 export const authRouter = Router();
@@ -143,6 +155,99 @@ const buildRelatedNameForUser = (user: {
     }
 
     return user.displayName;
+};
+
+const buildParentUsername = (studentNo: string, suffix = 0): string => {
+    return suffix === 0 ? `parent_${studentNo}` : `parent_${studentNo}_${suffix}`;
+};
+
+const findAvailableUsername = (baseUsername: string): string => {
+    let username = baseUsername;
+    let suffix = 1;
+    while (true) {
+        const exists = db.prepare(`SELECT id FROM users WHERE username = ?`).get(username) as { id: number } | undefined;
+        if (!exists) {
+            return username;
+        }
+        username = `${baseUsername}_${suffix}`;
+        suffix += 1;
+    }
+};
+
+const createParentAccountForStudent = (input: {
+    studentId: number;
+    displayName: string;
+    relation: string;
+    phone?: string | null;
+    username?: string | null;
+    operatorUserId: number;
+}): { userId: number; username: string; issuanceBatchId: number | null } => {
+    const student = db.prepare(
+        `SELECT id, student_no as studentNo, name, class_name as className
+         FROM students
+         WHERE id = ?`
+    ).get(input.studentId) as { id: number; studentNo: string; name: string; className: string } | undefined;
+
+    if (!student) {
+        throw new Error("学生不存在");
+    }
+
+    const desiredUsername = input.username?.trim() || buildParentUsername(student.studentNo);
+    const username = findAvailableUsername(desiredUsername);
+    const temporaryPassword = generateTemporaryPassword();
+    const createdAt = dayjs().toISOString();
+    const result = db.prepare(
+        `INSERT INTO users (
+            username,
+            display_name,
+            password_hash,
+            role,
+            linked_student_id,
+            phone,
+            must_change_password,
+            password_reset_at,
+            is_active,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, NULL, ?, 1, ?, 1, ?)`
+    ).run(
+        username,
+        input.displayName.trim(),
+        hashPassword(temporaryPassword),
+        ROLES.PARENT,
+        input.phone?.trim() || null,
+        createdAt,
+        createdAt
+    );
+
+    const parentUserId = Number(result.lastInsertRowid);
+    db.prepare(
+        `INSERT OR IGNORE INTO parent_student_links (parent_user_id, student_id, relation, created_at)
+         VALUES (?, ?, ?, ?)`
+    ).run(parentUserId, student.id, input.relation.trim(), createdAt);
+    db.prepare(`UPDATE students SET parent_user_id = COALESCE(parent_user_id, ?) WHERE id = ?`).run(parentUserId, student.id);
+
+    const issuanceBatchId = createIssuanceBatch(db, {
+        batchType: "parent_account_create",
+        sourceModule: "auth",
+        operatorUserId: input.operatorUserId,
+        title: `家长账号发放 ${student.name} ${dayjs().format("YYYY-MM-DD HH:mm")}`,
+        note: `${input.displayName.trim()} 已绑定 ${student.name}`,
+        items: [
+            {
+                userId: parentUserId,
+                username,
+                temporaryPassword,
+                displayName: input.displayName.trim(),
+                role: ROLES.PARENT,
+                relatedName: `${student.name} / ${student.studentNo} / ${student.className}`,
+                studentNo: student.studentNo,
+                className: student.className
+            }
+        ]
+    });
+
+    return { userId: parentUserId, username, issuanceBatchId };
 };
 
 authRouter.post("/login", (req, res) => {
@@ -425,6 +530,12 @@ authRouter.get("/accounts", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER,
                         WHERE tcl.teacher_user_id = u.id
                     ) as teacherSubjects,
                     (
+                        SELECT GROUP_CONCAT(s.name || ' / ' || s.student_no || ' / ' || s.class_name, '；')
+                        FROM parent_student_links psl
+                        JOIN students s ON s.id = psl.student_id
+                        WHERE psl.parent_user_id = u.id
+                    ) as parentStudents,
+                    (
                         SELECT ai.id
                         FROM account_issuance_items ai
                         WHERE ai.user_id = u.id
@@ -527,7 +638,117 @@ authRouter.post("/accounts/:id/reset-password", requireAuth, requireRole(ROLES.A
             displayName: target.displayName,
             role: target.role,
             mustChangePassword: true,
-            issuanceBatchId: batchId
+            issuanceBatchId: batchId,
+            batchTitle: `人工重置密码 ${target.displayName} ${dayjs().format("YYYY-MM-DD HH:mm")}`
+        }
+    });
+});
+
+authRouter.post("/parent-accounts", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (req: AuthedRequest, res) => {
+    const parsed = createParentAccountSchema.safeParse(req.body);
+    if (!parsed.success || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    if (!canAccessStudent(req, parsed.data.studentId)) {
+        res.status(403).json({ success: false, message: "无权为该学生创建家长账号" });
+        return;
+    }
+
+    try {
+        const created = createParentAccountForStudent({
+            ...parsed.data,
+            operatorUserId: req.user.id
+        });
+
+        logAudit({
+            userId: req.user.id,
+            actionModule: "auth",
+            actionType: "parent_account_create",
+            objectType: "user",
+            objectId: created.userId,
+            detail: { studentId: parsed.data.studentId, username: created.username, issuanceBatchId: created.issuanceBatchId },
+            ipAddress: extractIp(req)
+        });
+
+        res.json({
+            success: true,
+            message: "家长账号已创建",
+            data: created
+        });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "创建家长账号失败" });
+    }
+});
+
+authRouter.post("/parent-accounts/batch-generate", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (req: AuthedRequest, res) => {
+    const parsed = batchGenerateParentSchema.safeParse(req.body ?? {});
+    if (!parsed.success || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const targetRows = (parsed.data.studentIds?.length
+        ? db.prepare(
+            `SELECT id, student_no as studentNo, name
+             FROM students
+             WHERE id IN (${parsed.data.studentIds.map(() => "?").join(",")})`
+        ).all(...parsed.data.studentIds)
+        : db.prepare(
+            `SELECT s.id, s.student_no as studentNo, s.name
+             FROM students s
+             WHERE NOT EXISTS (
+                SELECT 1 FROM parent_student_links psl WHERE psl.student_id = s.id
+             )
+             ORDER BY s.id ASC`
+        ).all()) as Array<{ id: number; studentNo: string; name: string }>;
+
+    const accessibleRows = targetRows.filter((item) => canAccessStudent(req, item.id));
+    if (accessibleRows.length === 0) {
+        res.json({ success: true, message: "当前没有需要补齐主家长账号的学生", data: { count: 0, issuanceBatchIds: [] } });
+        return;
+    }
+
+    const existingLinkedStudentIds = new Set(
+        (
+            db.prepare(
+                `SELECT DISTINCT student_id as studentId
+                 FROM parent_student_links
+                 WHERE student_id IN (${accessibleRows.map(() => "?").join(",")})`
+            ).all(...accessibleRows.map((item) => item.id)) as Array<{ studentId: number }>
+        ).map((item) => item.studentId)
+    );
+    const pendingRows = accessibleRows.filter((item) => !existingLinkedStudentIds.has(item.id));
+    if (pendingRows.length === 0) {
+        res.json({ success: true, message: "当前没有需要补齐主家长账号的学生", data: { count: 0, issuanceBatchIds: [] } });
+        return;
+    }
+
+    const createdItems = pendingRows.map((item) =>
+        createParentAccountForStudent({
+            studentId: item.id,
+            displayName: `${item.name}家长`,
+            relation: "监护人",
+            operatorUserId: req.user!.id
+        })
+    );
+
+    logAudit({
+        userId: req.user.id,
+        actionModule: "auth",
+        actionType: "parent_account_batch_generate",
+        objectType: "user",
+        detail: { studentIds: pendingRows.map((item) => item.id), count: createdItems.length },
+        ipAddress: extractIp(req)
+    });
+
+    res.json({
+        success: true,
+        message: `已补齐 ${createdItems.length} 个主家长账号`,
+        data: {
+            count: createdItems.length,
+            issuanceBatchIds: createdItems.map((item) => item.issuanceBatchId).filter((item): item is number => Boolean(item))
         }
     });
 });

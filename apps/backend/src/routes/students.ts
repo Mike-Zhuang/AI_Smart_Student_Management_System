@@ -4,6 +4,7 @@ import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { canAccessStudent, requireAuth } from "../middleware/auth.js";
 import type { AuthedRequest } from "../types.js";
+import { deleteUserWithIssuance } from "../utils/accountMaintenance.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 import {
     ACADEMIC_STAGE_OPTIONS,
@@ -29,6 +30,56 @@ const updateSubjectSelectionSchema = z.object({
 const batchDeleteSchema = z.object({
     ids: z.array(z.number().int().positive()).min(1)
 });
+
+const classBatchDeleteSchema = z.object({
+    classNames: z.array(z.string().min(2)).min(1)
+});
+
+const removeOrphanParentAccounts = (): number[] => {
+    const rows = db.prepare(
+        `SELECT u.id
+         FROM users u
+         WHERE u.role = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM parent_student_links psl WHERE psl.parent_user_id = u.id
+           )`
+    ).all(ROLES.PARENT) as Array<{ id: number }>;
+
+    rows.forEach((item) => deleteUserWithIssuance(db, item.id));
+    return rows.map((item) => item.id);
+};
+
+const removeTeacherAccountsWithoutClasses = (): number[] => {
+    const rows = db.prepare(
+        `SELECT u.id
+         FROM users u
+         WHERE u.role IN (?, ?)
+           AND NOT EXISTS (
+             SELECT 1 FROM teacher_class_links tcl WHERE tcl.teacher_user_id = u.id
+           )`
+    ).all(ROLES.TEACHER, ROLES.HEAD_TEACHER) as Array<{ id: number }>;
+
+    rows.forEach((item) => deleteUserWithIssuance(db, item.id));
+    return rows.map((item) => item.id);
+};
+
+const deleteStudentById = (studentId: number): void => {
+    const studentAccountIds = (db.prepare(
+        `SELECT id
+         FROM users
+         WHERE linked_student_id = ? AND role = ?`
+    ).all(studentId, ROLES.STUDENT) as Array<{ id: number }>).map((item) => item.id);
+
+    db.prepare(`DELETE FROM exam_results WHERE student_id = ?`).run(studentId);
+    db.prepare(`DELETE FROM behavior_records WHERE student_id = ?`).run(studentId);
+    db.prepare(`DELETE FROM growth_profiles WHERE student_id = ?`).run(studentId);
+    db.prepare(`DELETE FROM alerts WHERE student_id = ?`).run(studentId);
+    db.prepare(`DELETE FROM leave_requests WHERE student_id = ?`).run(studentId);
+    db.prepare(`DELETE FROM career_recommendations WHERE student_id = ?`).run(studentId);
+    db.prepare(`DELETE FROM parent_student_links WHERE student_id = ?`).run(studentId);
+    studentAccountIds.forEach((userId) => deleteUserWithIssuance(db, userId));
+    db.prepare(`DELETE FROM students WHERE id = ?`).run(studentId);
+};
 
 studentsRouter.get("/subject-rules", requireAuth, (_req, res) => {
     res.json({
@@ -331,15 +382,8 @@ studentsRouter.delete("/:id", requireAuth, (req: AuthedRequest, res) => {
     };
 
     const runDelete = db.transaction(() => {
-        db.prepare(`DELETE FROM exam_results WHERE student_id = ?`).run(studentId);
-        db.prepare(`DELETE FROM behavior_records WHERE student_id = ?`).run(studentId);
-        db.prepare(`DELETE FROM growth_profiles WHERE student_id = ?`).run(studentId);
-        db.prepare(`DELETE FROM alerts WHERE student_id = ?`).run(studentId);
-        db.prepare(`DELETE FROM leave_requests WHERE student_id = ?`).run(studentId);
-        db.prepare(`DELETE FROM career_recommendations WHERE student_id = ?`).run(studentId);
-        db.prepare(`DELETE FROM parent_student_links WHERE student_id = ?`).run(studentId);
-        db.prepare(`DELETE FROM users WHERE linked_student_id = ? AND role = ?`).run(studentId, ROLES.STUDENT);
-        db.prepare(`DELETE FROM students WHERE id = ?`).run(studentId);
+        deleteStudentById(studentId);
+        removeOrphanParentAccounts();
     });
 
     runDelete();
@@ -395,16 +439,9 @@ studentsRouter.post("/batch-delete", requireAuth, (req: AuthedRequest, res) => {
 
     const transaction = db.transaction((ids: number[]) => {
         for (const studentId of ids) {
-            db.prepare(`DELETE FROM exam_results WHERE student_id = ?`).run(studentId);
-            db.prepare(`DELETE FROM behavior_records WHERE student_id = ?`).run(studentId);
-            db.prepare(`DELETE FROM growth_profiles WHERE student_id = ?`).run(studentId);
-            db.prepare(`DELETE FROM alerts WHERE student_id = ?`).run(studentId);
-            db.prepare(`DELETE FROM leave_requests WHERE student_id = ?`).run(studentId);
-            db.prepare(`DELETE FROM career_recommendations WHERE student_id = ?`).run(studentId);
-            db.prepare(`DELETE FROM parent_student_links WHERE student_id = ?`).run(studentId);
-            db.prepare(`DELETE FROM users WHERE linked_student_id = ? AND role = ?`).run(studentId, ROLES.STUDENT);
-            db.prepare(`DELETE FROM students WHERE id = ?`).run(studentId);
+            deleteStudentById(studentId);
         }
+        removeOrphanParentAccounts();
     });
 
     transaction(parsed.data.ids);
@@ -419,4 +456,133 @@ studentsRouter.post("/batch-delete", requireAuth, (req: AuthedRequest, res) => {
     });
 
     res.json({ success: true, message: `已批量删除 ${parsed.data.ids.length} 名学生`, data: { count: parsed.data.ids.length } });
+});
+
+studentsRouter.post("/classes/batch-delete", requireAuth, (req: AuthedRequest, res) => {
+    if (!req.user) {
+        res.status(401).json({ success: false, message: "未登录" });
+        return;
+    }
+
+    const parsed = classBatchDeleteSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const canDeleteRole = req.user.role === ROLES.ADMIN || req.user.role === ROLES.TEACHER || req.user.role === ROLES.HEAD_TEACHER;
+    if (!canDeleteRole) {
+        res.status(403).json({ success: false, message: "当前角色无权限整班删除" });
+        return;
+    }
+
+    const normalizedClassNames = parsed.data.classNames.map((item) => item.trim()).filter(Boolean);
+    const studentRows = db.prepare(
+        `SELECT id, class_name as className
+         FROM students
+         WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`
+    ).all(...normalizedClassNames) as Array<{ id: number; className: string }>;
+
+    const forbiddenStudent = studentRows.find((item) => !canAccessStudent(req, item.id));
+    if (forbiddenStudent) {
+        res.status(403).json({ success: false, message: `无权删除班级 ${forbiddenStudent.className}` });
+        return;
+    }
+
+    const summary = {
+        classCount: normalizedClassNames.length,
+        studentCount: studentRows.length,
+        examResultCount: 0,
+        behaviorRecordCount: 0,
+        growthProfileCount: 0,
+        alertCount: 0,
+        leaveRequestCount: 0,
+        recommendationCount: 0,
+        studentAccountCount: 0,
+        parentLinkCount: 0,
+        classProfileCount: 0,
+        classLogCount: 0,
+        wellbeingPostCount: 0,
+        galleryCount: 0,
+        groupScoreCount: 0,
+        teacherLinkCount: 0,
+        deletedParentAccountCount: 0,
+        deletedTeacherAccountCount: 0
+    };
+
+    const countByClassSet = (table: string, field: string): number => {
+        const row = db.prepare(
+            `SELECT COUNT(*) as count
+             FROM ${table}
+             WHERE ${field} IN (${normalizedClassNames.map(() => "?").join(",")})`
+        ).get(...normalizedClassNames) as { count: number };
+        return row.count;
+    };
+
+    summary.classProfileCount = countByClassSet("class_profiles", "class_name");
+    summary.classLogCount = countByClassSet("class_logs", "class_name");
+    summary.wellbeingPostCount = countByClassSet("wellbeing_posts", "class_name");
+    summary.galleryCount = countByClassSet("class_gallery", "class_name");
+    summary.groupScoreCount = countByClassSet("group_score_records", "class_name");
+    summary.teacherLinkCount = countByClassSet("teacher_class_links", "class_name");
+
+    studentRows.forEach((item) => {
+        const count = (tableName: string, fieldName = "student_id"): number => {
+            const row = db.prepare(`SELECT COUNT(*) as count FROM ${tableName} WHERE ${fieldName} = ?`).get(item.id) as { count: number };
+            return row.count;
+        };
+
+        summary.examResultCount += count("exam_results");
+        summary.behaviorRecordCount += count("behavior_records");
+        summary.growthProfileCount += count("growth_profiles");
+        summary.alertCount += count("alerts");
+        summary.leaveRequestCount += count("leave_requests");
+        summary.recommendationCount += count("career_recommendations");
+        summary.parentLinkCount += count("parent_student_links");
+        summary.studentAccountCount += (db.prepare(
+            `SELECT COUNT(*) as count
+             FROM users
+             WHERE linked_student_id = ? AND role = ?`
+        ).get(item.id, ROLES.STUDENT) as { count: number }).count;
+    });
+
+    const transaction = db.transaction(() => {
+        for (const student of studentRows) {
+            deleteStudentById(student.id);
+        }
+
+        db.prepare(`DELETE FROM class_profiles WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
+        db.prepare(`DELETE FROM class_logs WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
+        db.prepare(`DELETE FROM wellbeing_posts WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
+        db.prepare(`DELETE FROM class_gallery WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
+        db.prepare(`DELETE FROM group_score_records WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
+        db.prepare(`DELETE FROM student_groups WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
+
+        const teacherIds = (db.prepare(
+            `SELECT DISTINCT teacher_user_id as teacherUserId
+             FROM teacher_class_links
+             WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`
+        ).all(...normalizedClassNames) as Array<{ teacherUserId: number }>).map((item) => item.teacherUserId);
+        db.prepare(`DELETE FROM teacher_class_links WHERE class_name IN (${normalizedClassNames.map(() => "?").join(",")})`).run(...normalizedClassNames);
+
+        summary.deletedParentAccountCount = removeOrphanParentAccounts().length;
+        summary.deletedTeacherAccountCount = removeTeacherAccountsWithoutClasses().filter((id) => teacherIds.includes(id)).length;
+    });
+
+    transaction();
+
+    logAudit({
+        userId: req.user.id,
+        actionModule: "students",
+        actionType: "class_batch_delete",
+        objectType: "class",
+        detail: { classNames: normalizedClassNames, ...summary },
+        ipAddress: extractIp(req)
+    });
+
+    res.json({
+        success: true,
+        message: `已级联删除 ${normalizedClassNames.length} 个班级`,
+        data: summary
+    });
 });

@@ -5,6 +5,7 @@ import { leaveStatusLabelMap, leaveTypeLabelMap, parentConfirmStatusLabelMap } f
 import { downloadExport } from "../lib/export";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
+import { ConfirmActionButton } from "./ConfirmActionButton";
 
 type MessageItem = {
     id: number;
@@ -276,11 +277,12 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                 <div className="inline-form section-actions">
                     <button className="secondary-btn" onClick={() => void downloadExport("/api/admin/export/module/leave-requests", "leave-requests")}>导出请假记录</button>
                     {canApprove ? (
-                        <button
-                            className="secondary-btn"
-                            type="button"
+                        <ConfirmActionButton
+                            buttonText={`批量删除请假（${selectedLeaveIds.length}）`}
+                            confirmTitle="确认批量删除请假"
+                            confirmMessage={`确定删除选中的 ${selectedLeaveIds.length} 条请假记录吗？删除后将无法恢复。`}
                             disabled={selectedLeaveIds.length === 0}
-                            onClick={async () => {
+                            onConfirm={async () => {
                                 try {
                                     await apiRequest("/api/home-school/leave-requests/batch-delete", {
                                         method: "POST",
@@ -292,9 +294,7 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                                     setError(err instanceof Error ? err.message : "批量删除请假失败");
                                 }
                             }}
-                        >
-                            批量删除请假
-                        </button>
+                        />
                     ) : null}
                 </div>
 

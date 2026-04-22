@@ -366,10 +366,9 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
 
     let answer = "";
     let reasoning = "";
-    req.on("close", () => {
-        if (!res.writableEnded) {
-            res.end();
-        }
+    let clientClosed = false;
+    res.on("close", () => {
+        clientClosed = true;
     });
 
     try {
@@ -384,10 +383,16 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
             },
             {
                 onTextDelta: (delta) => {
+                    if (clientClosed || res.writableEnded) {
+                        return;
+                    }
                     answer += delta;
                     sendSse(res, "delta", { delta });
                 },
                 onReasoningDelta: (delta) => {
+                    if (clientClosed || res.writableEnded) {
+                        return;
+                    }
                     reasoning += delta;
                     sendSse(res, "reasoning-delta", { delta });
                 }
@@ -400,7 +405,6 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
         const parsedAnswer = parseJsonAnswer(answer);
         if (!parsedAnswer) {
             sendSse(res, "error", { message: "模型返回格式异常，请重试（需返回合法 JSON）" });
-            res.end();
             return;
         }
 
@@ -444,6 +448,8 @@ careerRouter.post("/recommendations/generate-stream", requireAuth, async (req: A
         const reason = error instanceof Error ? error.message : "未知错误";
         sendSse(res, "error", { message: `模型调用失败: ${reason}` });
     } finally {
-        res.end();
+        if (!res.writableEnded) {
+            res.end();
+        }
     }
 });

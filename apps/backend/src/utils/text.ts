@@ -1,6 +1,6 @@
 import iconv from "iconv-lite";
 
-const MOJIBAKE_PATTERNS = [/�/, /锟/, /Ã/, /Â/, /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/];
+const MOJIBAKE_PATTERNS = [/�/, /锟/, /Ã/, /Â/, /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/, /å|æ|ç|è|é/];
 
 const TABLE_TEXT_COLUMNS: Array<{ table: string; key: string; columns: string[] }> = [
     { table: "students", key: "id", columns: ["name", "grade", "class_name", "interests", "career_goal", "subject_combination"] },
@@ -40,6 +40,12 @@ const scoreCandidate = (value: string): number => {
     if (!needsRepair(value)) {
         score += 4;
     }
+    if (/锟/.test(value)) {
+        score -= 8;
+    }
+    if (/�/.test(value)) {
+        score -= 6;
+    }
     if (/学年|学期|考试|班|学生|班主任|请假|通知|成长|化学|生物|地理|政治|语文|数学|英语|物理|历史/.test(value)) {
         score += 4;
     }
@@ -48,9 +54,23 @@ const scoreCandidate = (value: string): number => {
 
 const tryReDecode = (value: string): string[] => {
     const utf8FromLatin1 = Buffer.from(value, "latin1").toString("utf8");
+    const gbkFromLatin1 = iconv.decode(Buffer.from(value, "latin1"), "gbk");
     const gb18030FromLatin1 = iconv.decode(Buffer.from(value, "latin1"), "gb18030");
+    const utf8FromGbk = iconv.decode(Buffer.from(value, "binary"), "gbk");
     const gb18030FromUtf8 = iconv.decode(Buffer.from(value, "utf8"), "gb18030");
-    return [utf8FromLatin1, gb18030FromLatin1, gb18030FromUtf8];
+    return [utf8FromLatin1, gbkFromLatin1, gb18030FromLatin1, utf8FromGbk, gb18030FromUtf8];
+};
+
+export const decodeTextBuffer = (buffer: Buffer): string => {
+    const candidates = [
+        buffer.toString("utf8"),
+        iconv.decode(buffer, "gbk"),
+        iconv.decode(buffer, "gb18030")
+    ]
+        .map(trimInvisible)
+        .filter(Boolean);
+
+    return candidates.sort((left, right) => scoreCandidate(right) - scoreCandidate(left))[0] ?? "";
 };
 
 export const repairText = (value: unknown): string => {
@@ -88,6 +108,7 @@ export const normalizeExamName = (value: unknown): string => {
         .replace(/\s+/g, "")
         .replace(/学年第/g, "学年 第")
         .replace(/第([一二三四])学期/g, "第$1学期")
+        .replace(/锟斤拷/g, "")
         .replace(/\s+/g, " ")
         .trim();
 

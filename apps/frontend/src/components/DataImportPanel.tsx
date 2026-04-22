@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import { apiRequest } from "../lib/api";
 import { downloadFile } from "../lib/export";
+import { ConfirmActionButton } from "./ConfirmActionButton";
 
 type ImportKind = "students" | "exam-results" | "teachers";
 type ManageKind = ImportKind;
@@ -121,6 +122,7 @@ export const DataImportPanel = () => {
     const [students, setStudents] = useState<StudentRow[]>([]);
     const [studentKeyword, setStudentKeyword] = useState("");
     const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+    const [selectedClassNames, setSelectedClassNames] = useState<string[]>([]);
 
     const [examRows, setExamRows] = useState<ExamRow[]>([]);
     const [examKeyword, setExamKeyword] = useState("");
@@ -202,6 +204,19 @@ export const DataImportPanel = () => {
             : teacherRows;
         return target.slice(0, 80);
     }, [teacherKeyword, teacherRows]);
+
+    const classSummaries = useMemo(() => {
+        const summaryMap = new Map<string, { className: string; grade: string; count: number }>();
+        students.forEach((item) => {
+            const existing = summaryMap.get(item.className);
+            if (existing) {
+                existing.count += 1;
+            } else {
+                summaryMap.set(item.className, { className: item.className, grade: item.grade, count: 1 });
+            }
+        });
+        return Array.from(summaryMap.values()).sort((left, right) => left.className.localeCompare(right.className, "zh-Hans-CN"));
+    }, [students]);
 
     const downloadIssuanceRecords = (kind: ImportKind) => {
         const records = feedback[kind]?.summary?.issuanceRecords ?? [];
@@ -306,10 +321,6 @@ export const DataImportPanel = () => {
         if (selectedStudentIds.length === 0) {
             return;
         }
-        const confirmed = window.confirm(`确定批量删除 ${selectedStudentIds.length} 名学生吗？该操作会同时删除其成绩、画像、预警、选科建议与学生账号。`);
-        if (!confirmed) {
-            return;
-        }
 
         setManagingKind("students");
         setManageFeedback((prev) => ({ ...prev, students: "" }));
@@ -330,10 +341,6 @@ export const DataImportPanel = () => {
 
     const batchDeleteExamRows = async () => {
         if (selectedExamIds.length === 0) {
-            return;
-        }
-        const confirmed = window.confirm(`确定删除选中的 ${selectedExamIds.length} 条成绩记录吗？`);
-        if (!confirmed) {
             return;
         }
 
@@ -358,10 +365,6 @@ export const DataImportPanel = () => {
         if (selectedTeacherIds.length === 0) {
             return;
         }
-        const confirmed = window.confirm(`确定删除选中的 ${selectedTeacherIds.length} 条教师班级关系吗？若教师无其他班级关系且不是管理员，其教师账号也会一并删除。`);
-        if (!confirmed) {
-            return;
-        }
 
         setManagingKind("teachers");
         setManageFeedback((prev) => ({ ...prev, teachers: "" }));
@@ -375,6 +378,29 @@ export const DataImportPanel = () => {
             await loadTeacherRows();
         } catch (error) {
             setManageFeedback((prev) => ({ ...prev, teachers: error instanceof Error ? error.message : "批量删除教师班级关系失败" }));
+        } finally {
+            setManagingKind(null);
+        }
+    };
+
+    const batchDeleteClasses = async () => {
+        if (selectedClassNames.length === 0) {
+            return;
+        }
+
+        setManagingKind("students");
+        setManageFeedback((prev) => ({ ...prev, students: "" }));
+        try {
+            const response = await apiRequest<{ summary: Record<string, number> }>("/api/students/classes/batch-delete", {
+                method: "POST",
+                body: JSON.stringify({ classNames: selectedClassNames })
+            });
+            setManageFeedback((prev) => ({ ...prev, students: response.message }));
+            setSelectedClassNames([]);
+            setSelectedStudentIds([]);
+            await loadManageData();
+        } catch (error) {
+            setManageFeedback((prev) => ({ ...prev, students: error instanceof Error ? error.message : "整班删除失败" }));
         } finally {
             setManagingKind(null);
         }
@@ -467,11 +493,65 @@ export const DataImportPanel = () => {
                     <button type="button" className="secondary-btn" onClick={() => void loadStudents()}>
                         刷新学生列表
                     </button>
-                    <button type="button" className="primary-btn" disabled={selectedStudentIds.length === 0 || managingKind === "students"} onClick={() => void batchDeleteStudents()}>
-                        {managingKind === "students" ? "删除中..." : `批量删除学生（${selectedStudentIds.length}）`}
-                    </button>
+                    <ConfirmActionButton
+                        className="primary-btn"
+                        disabled={selectedStudentIds.length === 0 || managingKind === "students"}
+                        loadingText="删除中..."
+                        buttonText={`批量删除学生（${selectedStudentIds.length}）`}
+                        confirmTitle="确认批量删除学生"
+                        confirmMessage={`确定删除选中的 ${selectedStudentIds.length} 名学生吗？系统会同时删除其成绩、画像、预警、选科建议、学生账号以及关联家长绑定。`}
+                        onConfirm={batchDeleteStudents}
+                    />
                 </div>
                 {manageFeedback.students ? <p className={manageFeedback.students.includes("删除") ? "success-text" : "error-text"}>{manageFeedback.students}</p> : null}
+                <div className="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>班级</th>
+                                <th>年级</th>
+                                <th>学生数</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {classSummaries.map((item) => (
+                                <tr key={`class-summary-${item.className}`}>
+                                    <td>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedClassNames.includes(item.className)}
+                                            onChange={(event) =>
+                                                setSelectedClassNames((prev) =>
+                                                    event.target.checked ? [...prev, item.className] : prev.filter((value) => value !== item.className)
+                                                )
+                                            }
+                                        />
+                                    </td>
+                                    <td>{item.className}</td>
+                                    <td>{item.grade}</td>
+                                    <td>{item.count}</td>
+                                </tr>
+                            ))}
+                            {classSummaries.length === 0 ? (
+                                <tr>
+                                    <td colSpan={4} className="muted-text">当前暂无可清理班级。</td>
+                                </tr>
+                            ) : null}
+                        </tbody>
+                    </table>
+                </div>
+                <div className="inline-form section-actions compact-actions">
+                    <ConfirmActionButton
+                        className="primary-btn"
+                        disabled={selectedClassNames.length === 0 || managingKind === "students"}
+                        loadingText="删除中..."
+                        buttonText={`整班级联删除（${selectedClassNames.length}）`}
+                        confirmTitle="确认整班级联删除"
+                        confirmMessage={`确定整班删除 ${selectedClassNames.length} 个班级吗？系统会级联删除学生、成绩、画像、预警、选科建议、请假、班级简介、班级日志、心灵驿站、班级风采、小组积分、教师班级关系，以及失去关联后的学生/家长/教师账号。`}
+                        onConfirm={batchDeleteClasses}
+                    />
+                </div>
                 <div className="table-scroll">
                     <table>
                         <thead>
@@ -526,9 +606,15 @@ export const DataImportPanel = () => {
                     <button type="button" className="secondary-btn" onClick={() => void loadExamRows()}>
                         刷新成绩列表
                     </button>
-                    <button type="button" className="primary-btn" disabled={selectedExamIds.length === 0 || managingKind === "exam-results"} onClick={() => void batchDeleteExamRows()}>
-                        {managingKind === "exam-results" ? "删除中..." : `批量删除成绩（${selectedExamIds.length}）`}
-                    </button>
+                    <ConfirmActionButton
+                        className="primary-btn"
+                        disabled={selectedExamIds.length === 0 || managingKind === "exam-results"}
+                        loadingText="删除中..."
+                        buttonText={`批量删除成绩（${selectedExamIds.length}）`}
+                        confirmTitle="确认批量删除成绩"
+                        confirmMessage={`确定删除选中的 ${selectedExamIds.length} 条成绩记录吗？删除后相关成长趋势会同步更新。`}
+                        onConfirm={batchDeleteExamRows}
+                    />
                 </div>
                 {manageFeedback["exam-results"] ? <p className={manageFeedback["exam-results"].includes("删除") ? "success-text" : "error-text"}>{manageFeedback["exam-results"]}</p> : null}
                 <div className="table-scroll">
@@ -585,9 +671,15 @@ export const DataImportPanel = () => {
                     <button type="button" className="secondary-btn" onClick={() => void loadTeacherRows()}>
                         刷新教师列表
                     </button>
-                    <button type="button" className="primary-btn" disabled={selectedTeacherIds.length === 0 || managingKind === "teachers"} onClick={() => void batchDeleteTeacherRows()}>
-                        {managingKind === "teachers" ? "删除中..." : `批量删除关系（${selectedTeacherIds.length}）`}
-                    </button>
+                    <ConfirmActionButton
+                        className="primary-btn"
+                        disabled={selectedTeacherIds.length === 0 || managingKind === "teachers"}
+                        loadingText="删除中..."
+                        buttonText={`批量删除关系（${selectedTeacherIds.length}）`}
+                        confirmTitle="确认批量删除教师班级关系"
+                        confirmMessage={`确定删除选中的 ${selectedTeacherIds.length} 条教师班级关系吗？若教师失去全部班级关系且不是管理员，教师账号也会同步删除。`}
+                        onConfirm={batchDeleteTeacherRows}
+                    />
                 </div>
                 {manageFeedback.teachers ? <p className={manageFeedback.teachers.includes("删除") ? "success-text" : "error-text"}>{manageFeedback.teachers}</p> : null}
                 <div className="table-scroll">

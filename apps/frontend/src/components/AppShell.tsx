@@ -7,6 +7,7 @@ import { SiteFooter } from "./SiteFooter";
 
 const NAV_ITEMS = [
     { key: "overview", label: "首页", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
+    { key: "class-space", label: "班级空间", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "home-school", label: "家校沟通", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "career", label: "生涯发展与选科", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },
     { key: "growth", label: "学业成长", roles: ["admin", "teacher", "head_teacher", "parent", "student"] },

@@ -327,6 +327,45 @@
 - 验证结果：
   - 已检查 `submit/` 中关键文档完整存在且 `AGENTS.md`、`node_modules/` 不存在。
 
+## 2026-04-22 18:58:03 +0800
+
+- 完成“真实数据优先”的二轮修复与体验重构：
+  - `apps/backend/src/routes/career.ts`、`apps/backend/src/services/zhipu.ts`、`apps/frontend/src/components/CareerPanel.tsx`：
+    - 加固选科建议 SSE 流式解析与收尾逻辑，兼容多 `data:` 行、`\r\n`、尾部缓冲与“仅最终结果无 complete”场景。
+    - 选科页顶部改为“配置区 + 自由补充信息卡片”双栏工作区，补充生成状态分阶段提示。
+  - `apps/backend/src/routes/classSpace.ts`、`apps/frontend/src/components/ClassSpacePanel.tsx`、`apps/frontend/src/components/OrgStructurePanel.tsx`、`apps/frontend/src/pages/DashboardPage.tsx`、`apps/frontend/src/components/AppShell.tsx`：
+    - 新增学生/家长/教师/班主任/管理员可见的只读“班级空间”。
+    - 组织架构升级为按“年级 -> 班级 -> 学生”逐层折叠，并保留按教师查看跨班任教关系。
+    - `/dashboard` 默认重定向到 `/dashboard/overview`，首次进入即可高亮首页导航。
+  - `apps/frontend/src/lib/classProfile.ts`、`apps/frontend/src/components/HeadTeacherPanel.tsx`：
+    - 班委会、课程表、座位表改为结构化编辑与展示，兼容旧文本数据。
+    - 座位表支持按花名册随机排座，班委会不再直接裸露 JSON。
+  - `apps/frontend/src/components/ConfirmActionButton.tsx`、`apps/frontend/src/components/DataImportPanel.tsx`、`apps/frontend/src/components/HomeSchoolPanel.tsx`：
+    - 全部数据清理入口统一接入二次确认。
+    - 新增整班级联删除入口，删除结果按班级维度汇总返回。
+  - `apps/backend/src/routes/auth.ts`、`apps/backend/src/routes/dataImport.ts`、`apps/backend/src/routes/students.ts`、`apps/backend/src/utils/accountMaintenance.ts`、`apps/frontend/src/components/AccountPanel.tsx`：
+    - 学生导入自动生成主家长账号并写入发放批次。
+    - 新增补齐主家长账号与手动追加家长账号能力。
+    - 重置密码后前端直接弹出批次下载浮层，不再要求滚动到页面底部寻找。
+    - 学生/班级删除链路补齐账号发放记录清理与孤儿家长/教师账号回收。
+  - `apps/backend/src/utils/text.ts`、`apps/backend/src/routes/dataImport.ts`：
+    - 编码修复升级为多候选解码 + 打分选优，并把考试名称查询纳入乱码清洗与学年规范化。
+- 验证结果：
+  - 执行 `npm run build` 通过（后端 `tsc` + 前端 `tsc -b && vite build`）。
+
+## 2026-04-22 19:03:04 +0800
+
+- 同步更新用户文档：
+  - `README.md`：
+    - 补充整班级联删除、班级空间、家长账号自动发放、删除前二次确认、流式选科兜底说明。
+    - 更新角色权限描述，明确学生/家长可查看班级空间。
+  - `GUIDE.md`：
+    - 新增“班级空间”“我的账号”章节，补齐家长账号管理、账号发放批次、重置密码即时下载说明。
+    - 更新生涯选科、班级治理、数据导入、组织架构的最新操作路径与界面变化。
+    - 补充成绩乱码排障与整班级联删除接口说明。
+- 验证结果：
+  - 再次执行 `npm run build` 通过（后端 `tsc` + 前端 `tsc -b && vite build`）。
+
 ## 2026-04-22 16:53:39 +0800
 
 - 完成“真实校园场景化”重构第一阶段落地：

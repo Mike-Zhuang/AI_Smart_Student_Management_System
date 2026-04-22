@@ -5,7 +5,6 @@ import { parse } from "csv-parse/sync";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import multer from "multer";
-import iconv from "iconv-lite";
 import XLSX from "xlsx";
 import { z } from "zod";
 import { ROLES } from "../constants.js";
@@ -13,9 +12,10 @@ import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import type { AuthedRequest } from "../types.js";
 import { createIssuanceBatch } from "../utils/accountIssuance.js";
+import { deleteUserWithIssuance } from "../utils/accountMaintenance.js";
 import { extractIp, logAudit } from "../utils/audit.js";
 import { generateTemporaryPassword, hashPassword } from "../utils/auth.js";
-import { normalizeClassName, normalizeExamName, normalizeName, repairText } from "../utils/text.js";
+import { decodeTextBuffer, normalizeClassName, normalizeExamName, normalizeName, repairRecordStrings, repairText } from "../utils/text.js";
 
 type SheetRecord = Record<string, unknown>;
 
@@ -183,11 +183,7 @@ const decodeCsvBuffer = (buffer: Buffer): string => {
         return buffer.toString("utf-8");
     }
 
-    try {
-        return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-    } catch {
-        return iconv.decode(buffer, "gb18030");
-    }
+    return decodeTextBuffer(buffer);
 };
 
 const parseCsvRows = (buffer: Buffer): SheetRecord[] => {
@@ -465,6 +461,82 @@ const syncStudentAccount = (row: StudentImportRow, studentId: number, summary: I
     recordAccountSync(summary, "updated");
 };
 
+const buildParentUsername = (studentNo: string, suffix = 0): string => {
+    return suffix === 0 ? `parent_${studentNo}` : `parent_${studentNo}_${suffix}`;
+};
+
+const findAvailableParentUsername = (studentNo: string): string => {
+    let suffix = 0;
+    while (true) {
+        const username = buildParentUsername(studentNo, suffix);
+        const exists = db.prepare(`SELECT id FROM users WHERE username = ?`).get(username) as { id: number } | undefined;
+        if (!exists) {
+            return username;
+        }
+        suffix += 1;
+    }
+};
+
+const ensurePrimaryParentAccount = (row: StudentImportRow, studentId: number, summary: ImportSummary): void => {
+    const existingLink = db.prepare(
+        `SELECT psl.parent_user_id as parentUserId
+         FROM parent_student_links psl
+         WHERE psl.student_id = ?
+         ORDER BY psl.id ASC
+         LIMIT 1`
+    ).get(studentId) as { parentUserId: number } | undefined;
+
+    if (existingLink?.parentUserId) {
+        db.prepare(`UPDATE students SET parent_user_id = ? WHERE id = ?`).run(existingLink.parentUserId, studentId);
+        return;
+    }
+
+    const username = findAvailableParentUsername(row.studentNo);
+    const displayName = `${row.name}家长`;
+    const temporaryPassword = generateTemporaryPassword();
+    const createdAt = dayjs().toISOString();
+    const userResult = db.prepare(
+        `INSERT INTO users (
+            username,
+            display_name,
+            password_hash,
+            role,
+            linked_student_id,
+            must_change_password,
+            password_reset_at,
+            is_active,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, NULL, 1, ?, 1, ?)`
+    ).run(
+        username,
+        displayName,
+        hashPassword(temporaryPassword),
+        ROLES.PARENT,
+        createdAt,
+        createdAt
+    );
+    const parentUserId = Number(userResult.lastInsertRowid);
+
+    db.prepare(
+        `INSERT INTO parent_student_links (parent_user_id, student_id, relation, created_at)
+         VALUES (?, ?, ?, ?)`
+    ).run(parentUserId, studentId, "监护人", createdAt);
+    db.prepare(`UPDATE students SET parent_user_id = ? WHERE id = ?`).run(parentUserId, studentId);
+
+    summary.issuanceRecords.push({
+        userId: parentUserId,
+        username,
+        temporaryPassword,
+        displayName,
+        role: ROLES.PARENT,
+        relatedName: `${row.name} / ${row.studentNo} / ${row.className}`,
+        studentNo: row.studentNo,
+        className: row.className
+    });
+    recordAccountSync(summary, "created");
+};
+
 const syncTeacherAccount = (row: TeacherImportRow, summary: ImportSummary): number => {
     const displayName = row.displayName;
     const desiredRole = row.isHeadTeacher === 1 ? ROLES.HEAD_TEACHER : ROLES.TEACHER;
@@ -652,6 +724,7 @@ dataImportRouter.post("/students", uploadSheet, (req: AuthedRequest, res) => {
             }
 
             syncStudentAccount(row, studentId, summary);
+            ensurePrimaryParentAccount(row, studentId, summary);
         }
     });
 
@@ -737,16 +810,6 @@ dataImportRouter.post("/exam-results", uploadSheet, (req: AuthedRequest, res) =>
 
     runImport(validRows);
     summary.failed = calcFailedLineCount(summary.errors);
-
-    if (req.user && summary.issuanceRecords.length > 0) {
-        summary.issuanceBatchId = createIssuanceBatch(db, {
-            batchType: "teacher_import",
-            sourceModule: "data-import",
-            operatorUserId: req.user.id,
-            title: `教师导入账号发放 ${dayjs().format("YYYY-MM-DD HH:mm")}`,
-            items: summary.issuanceRecords
-        });
-    }
 
     if (req.user) {
         logAudit({
@@ -848,6 +911,14 @@ dataImportRouter.get("/exam-results/manage", (req: AuthedRequest, res) => {
         )
         .all() as Array<Record<string, unknown>>;
 
+    rows = rows.map((item) => {
+        const repaired = repairRecordStrings(item);
+        return {
+            ...repaired,
+            examName: normalizeExamName(repaired.examName) || repaired.examName
+        };
+    });
+
     if (examName) {
         rows = rows.filter((item) => String(item.examName).includes(examName));
     }
@@ -910,7 +981,7 @@ dataImportRouter.post("/teachers/batch-delete", (req: AuthedRequest, res) => {
                 .get(item.teacherUserId) as { count: number };
             const user = db.prepare(`SELECT role FROM users WHERE id = ?`).get(item.teacherUserId) as { role: string } | undefined;
             if (remaining.count === 0 && user && user.role !== ROLES.ADMIN) {
-                db.prepare(`DELETE FROM users WHERE id = ?`).run(item.teacherUserId);
+                deleteUserWithIssuance(db, item.teacherUserId);
             }
         }
     });

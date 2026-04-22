@@ -785,6 +785,63 @@ td {
     gap: 10px;
 }
 
+.career-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+    gap: 16px;
+    align-items: start;
+}
+
+.career-config-card,
+.career-supplement-card,
+.structured-editor {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--border-warm);
+    border-radius: var(--radius-md);
+    background: white;
+}
+
+.career-supplement-card {
+    background: linear-gradient(180deg, rgba(201, 100, 66, 0.06), rgba(255, 255, 255, 0.96));
+}
+
+.career-supplement-input {
+    min-height: 260px;
+    line-height: 1.7;
+}
+
+.confirm-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 20, 19, 0.42);
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    z-index: 60;
+}
+
+.confirm-modal {
+    width: min(520px, 100%);
+    background: var(--bg-ivory);
+    border: 1px solid var(--border-cream);
+    border-radius: 20px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
+    padding: 20px;
+    display: grid;
+    gap: 12px;
+}
+
+.confirm-modal h4,
+.confirm-modal p {
+    margin: 0;
+}
+
+.structured-editor table input {
+    min-width: 88px;
+}
+
 .org-summary-grid {
     margin-top: 12px;
 }
@@ -914,6 +971,10 @@ td {
     }
 
     .ai-chat-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .career-workspace {
         grid-template-columns: 1fr;
     }
 
