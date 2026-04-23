@@ -209,7 +209,8 @@ pnpm run build:pnpm
 
 1. 确认打开的是正确地址
 2. 确认请求是发往 /api 而不是 http://localhost:4000
-3. 刷新浏览器缓存后重试
+3. 若页面仍显示已登录但接口提示“令牌无效或已过期”，直接刷新页面，系统会优先尝试用 HttpOnly 刷新会话自动恢复；若刷新失败再重新登录
+4. 如部署在生产环境，请确认后端 `.env` 已正确配置 `ALLOWED_ORIGINS`、`COOKIE_SECURE` 与反代 HTTPS
 
 ### 8.2 控制台出现 runtime.connect 错误
 
@@ -300,18 +301,23 @@ pnpm run build:pnpm
 
 已实现：
 
-- JWT 登录鉴权
+- 短时 Access Token + HttpOnly Refresh Cookie 会话体系
+- 会话轮换、当前设备退出、全设备强制下线
 - RBAC 角色权限
-- 基础限流
+- 分场景限流（读 / 写 / AI / 上传 / 认证）
+- 登录失败计数、临时锁定与风险挑战
 - Helmet 安全头
+- CSP / Referrer-Policy / Permissions-Policy / COOP / X-Frame-Options
 - 审计日志
 - 关闭公开注册
 - 首页备案号挂载
 - `robots.txt` + `noindex,nofollow` 反爬配置
+- 业务自由文本敏感词拦截
+- 上传文件白名单、双扩展名防护与文件头校验
 
 注意：
 
-- 本项目面向评比与演示，不等同于高强度生产安全基线。
+- 当前 `xlsx` 生态仍存在上游公开安全告警，项目已通过文件大小、行数、列长、类型白名单和受控解析路径做风险收口；如需更高基线，建议优先使用 CSV 模板导入。
 - 涉及真实学生数据时，请先脱敏并遵循学校数据治理要求。
 
 ## 11. 许可证

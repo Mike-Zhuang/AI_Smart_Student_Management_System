@@ -3,12 +3,15 @@ import { Router, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { PROMPT_TEMPLATES, fillTemplate, getTemplateById } from "../config/promptTemplates.js";
+import { securityConfig } from "../config/security.js";
 import { DEFAULT_MODEL_ID, getSupportedModelById, SUPPORTED_MODELS } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { callZhipu, streamZhipu, ZhipuCallError } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { assertSafeBusinessText } from "../utils/contentSafety.js";
+import { assertSafeUploadFile } from "../utils/fileSecurity.js";
 
 const chatSchema = z.object({
     apiKey: z.string().min(10),
@@ -63,7 +66,7 @@ export const aiRouter = Router();
 const aiUpload = multer({
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 5 * 1024 * 1024
+        fileSize: Math.min(securityConfig.uploadMaxBytes, 5 * 1024 * 1024)
     }
 });
 
@@ -143,6 +146,21 @@ const summarizeTemplateVariables = (variables: Record<string, string>): string =
         .join("; ");
 
     return summary.length > 240 ? `${summary.slice(0, 240)}...` : summary;
+};
+
+const sanitizeChatPrompt = (prompt: string): string =>
+    assertSafeBusinessText(prompt, { fieldName: "AI 提示词", required: true, maxLength: 4000 });
+
+const sanitizeTemplateVariables = (variables: Record<string, string>): Record<string, string> => {
+    const next: Record<string, string> = {};
+    for (const [key, value] of Object.entries(variables)) {
+        next[key] = assertSafeBusinessText(value, {
+            fieldName: `模板变量 ${key}`,
+            required: true,
+            maxLength: 2000
+        });
+    }
+    return next;
 };
 
 const toPublicErrorMessage = (error: unknown): string => {
@@ -337,6 +355,7 @@ aiRouter.post("/chat", requireAuth, async (req, res) => {
         pruneExpiredConversations();
 
         const data = parsed.data;
+        const safePrompt = sanitizeChatPrompt(data.prompt);
         const startedAt = Date.now();
         const model = getSupportedModelById(data.model ?? DEFAULT_MODEL_ID);
         if (!model) {
@@ -363,7 +382,7 @@ aiRouter.post("/chat", requireAuth, async (req, res) => {
                 return;
             }
         } else {
-            const title = data.prompt.length > 20 ? `${data.prompt.slice(0, 20)}...` : data.prompt;
+            const title = safePrompt.length > 20 ? `${safePrompt.slice(0, 20)}...` : safePrompt;
             conversationId = createConversation(authedReq.user.id, model.id, data.scenario ?? "general", title);
         }
 
@@ -371,6 +390,7 @@ aiRouter.post("/chat", requireAuth, async (req, res) => {
         const result = await callZhipu({
             ...data,
             model: model.id,
+            prompt: safePrompt,
             responseFormat,
             historyMessages,
             enableThinking: data.enableThinking ?? model.thinking,
@@ -378,8 +398,8 @@ aiRouter.post("/chat", requireAuth, async (req, res) => {
         });
 
         const userMessage = data.multimodal && data.multimodal.length > 0
-            ? `[多模态输入 ${data.multimodal.length} 项]\n${data.prompt}`
-            : data.prompt;
+            ? `[多模态输入 ${data.multimodal.length} 项]\n${safePrompt}`
+            : safePrompt;
 
         appendMessage(conversationId, "user", userMessage);
         appendMessage(conversationId, "assistant", result.content, result.reasoning);
@@ -427,6 +447,7 @@ aiRouter.post("/chat-stream", requireAuth, async (req, res) => {
 
     pruneExpiredConversations();
     const data = parsed.data;
+    const safePrompt = sanitizeChatPrompt(data.prompt);
     const modelCheck = ensureStreamingModel(data.model ?? DEFAULT_MODEL_ID);
     if (!modelCheck.ok) {
         res.status(400).json({ success: false, message: modelCheck.message });
@@ -453,14 +474,14 @@ aiRouter.post("/chat-stream", requireAuth, async (req, res) => {
             return;
         }
     } else {
-        const title = data.prompt.length > 20 ? `${data.prompt.slice(0, 20)}...` : data.prompt;
+        const title = safePrompt.length > 20 ? `${safePrompt.slice(0, 20)}...` : safePrompt;
         conversationId = createConversation(authedReq.user.id, model.id, data.scenario ?? "general", title);
     }
 
     const startedAt = Date.now();
     const userMessage = data.multimodal && data.multimodal.length > 0
-        ? `[多模态输入 ${data.multimodal.length} 项]\n${data.prompt}`
-        : data.prompt;
+        ? `[多模态输入 ${data.multimodal.length} 项]\n${safePrompt}`
+        : safePrompt;
     appendMessage(conversationId, "user", userMessage);
 
     initSse(res);
@@ -477,6 +498,7 @@ aiRouter.post("/chat-stream", requireAuth, async (req, res) => {
             {
                 ...data,
                 model: model.id,
+                prompt: safePrompt,
                 responseFormat,
                 historyMessages,
                 enableThinking: data.enableThinking ?? model.thinking,
@@ -551,14 +573,10 @@ aiRouter.post("/upload-image-chat-stream", requireAuth, aiUpload.single("image")
         return;
     }
 
-    if (!req.file.mimetype.startsWith("image/")) {
-        res.status(400).json({ success: false, message: "仅支持图片文件" });
-        return;
-    }
-
     pruneExpiredConversations();
 
     const input = parsed.data;
+    const safePrompt = sanitizeChatPrompt(input.prompt);
     const conversationIdValue = typeof input.conversationId === "number" && Number.isFinite(input.conversationId)
         ? input.conversationId
         : undefined;
@@ -583,11 +601,20 @@ aiRouter.post("/upload-image-chat-stream", requireAuth, aiUpload.single("image")
             return;
         }
     } else {
-        const title = input.prompt.length > 20 ? `${input.prompt.slice(0, 20)}...` : input.prompt;
+        const title = safePrompt.length > 20 ? `${safePrompt.slice(0, 20)}...` : safePrompt;
         conversationId = createConversation(authedReq.user.id, model.id, input.scenario ?? "general", title);
     }
 
-    appendMessage(conversationId, "user", `[图片输入]\n${input.prompt}`);
+    let validatedUpload;
+    try {
+        validatedUpload = assertSafeUploadFile(req.file, "ai-image");
+        void validatedUpload;
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "上传图片不合法" });
+        return;
+    }
+
+    appendMessage(conversationId, "user", `[图片输入]\n${safePrompt}`);
     initSse(res);
     sendSse(res, "conversation", { conversationId, model: model.id });
 
@@ -603,7 +630,7 @@ aiRouter.post("/upload-image-chat-stream", requireAuth, aiUpload.single("image")
             {
                 apiKey: input.apiKey,
                 model: model.id,
-                prompt: input.prompt,
+                prompt: safePrompt,
                 multimodal: [{ type: "image_url", image_url: { url: dataUrl } }],
                 historyMessages,
                 enableThinking: input.enableThinking ?? model.thinking,
@@ -657,6 +684,7 @@ aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
     pruneExpiredConversations();
 
     const input = parsed.data;
+    const safeVariables = sanitizeTemplateVariables(input.variables);
     const template = getTemplateById(input.templateId);
     if (!template) {
         res.status(404).json({ success: false, message: "模板不存在" });
@@ -675,11 +703,11 @@ aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
         return;
     }
 
-    const prompt = `${fillTemplate(template.template, input.variables)}\n\n输出规范:\n${template.outputSpec}`;
+    const prompt = `${fillTemplate(template.template, safeVariables)}\n\n输出规范:\n${template.outputSpec}`;
 
     const missingVariables = template.variableMeta
         .map((item) => item.key)
-        .filter((key) => !input.variables[key] || input.variables[key].trim().length === 0);
+        .filter((key) => !safeVariables[key] || safeVariables[key].trim().length === 0);
 
     if (missingVariables.length > 0) {
         res.status(400).json({
@@ -722,7 +750,7 @@ aiRouter.post("/chat-with-template", requireAuth, async (req, res) => {
                 `templateId: ${template.id}`,
                 `templateName: ${template.name}`,
                 `model: ${model.id}`,
-                `variables: ${summarizeTemplateVariables(input.variables)}`
+                `variables: ${summarizeTemplateVariables(safeVariables)}`
             ].join("\n")
         );
         appendMessage(conversationId, "assistant", result.content, result.reasoning);
@@ -773,6 +801,7 @@ aiRouter.post("/chat-with-template-stream", requireAuth, async (req, res) => {
     pruneExpiredConversations();
 
     const input = parsed.data;
+    const safeVariables = sanitizeTemplateVariables(input.variables);
     const template = getTemplateById(input.templateId);
     if (!template) {
         res.status(404).json({ success: false, message: "模板不存在" });
@@ -792,7 +821,7 @@ aiRouter.post("/chat-with-template-stream", requireAuth, async (req, res) => {
 
     const missingVariables = template.variableMeta
         .map((item) => item.key)
-        .filter((key) => !input.variables[key] || input.variables[key].trim().length === 0);
+        .filter((key) => !safeVariables[key] || safeVariables[key].trim().length === 0);
 
     if (missingVariables.length > 0) {
         res.status(400).json({
@@ -813,7 +842,7 @@ aiRouter.post("/chat-with-template-stream", requireAuth, async (req, res) => {
         conversationId = createConversation(authedReq.user.id, model.id, template.scenario, template.name);
     }
 
-    const prompt = `${fillTemplate(template.template, input.variables)}\n\n输出规范:\n${template.outputSpec}`;
+    const prompt = `${fillTemplate(template.template, safeVariables)}\n\n输出规范:\n${template.outputSpec}`;
     appendMessage(
         conversationId,
         "user",
@@ -822,7 +851,7 @@ aiRouter.post("/chat-with-template-stream", requireAuth, async (req, res) => {
             `templateId: ${template.id}`,
             `templateName: ${template.name}`,
             `model: ${model.id}`,
-            `variables: ${summarizeTemplateVariables(input.variables)}`
+            `variables: ${summarizeTemplateVariables(safeVariables)}`
         ].join("\n")
     );
 

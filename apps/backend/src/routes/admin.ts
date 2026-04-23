@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import dayjs from "dayjs";
 import { z } from "zod";
+import { securityConfig } from "../config/security.js";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
@@ -84,7 +85,8 @@ adminRouter.get("/system-overview", (_req, res) => {
 
 adminRouter.get("/audit-logs", (req, res) => {
     const module = typeof req.query.module === "string" ? req.query.module : null;
-    const limit = Number(req.query.limit ?? 200);
+    const requestedLimit = Number(req.query.limit ?? 200);
+    const limit = Number.isNaN(requestedLimit) ? 200 : Math.min(Math.max(requestedLimit, 1), securityConfig.auditQueryMaxLimit);
 
     const rows = module
         ? db

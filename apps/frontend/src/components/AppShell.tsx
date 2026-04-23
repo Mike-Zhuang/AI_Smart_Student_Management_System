@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { apiRequest } from "../lib/api";
 import { roleHomeMessageMap, roleLabelMap } from "../lib/labels";
 import { storage } from "../lib/storage";
 import type { User } from "../lib/types";
@@ -64,9 +65,17 @@ export const AppShell = ({
                         className="secondary-btn"
                         onClick={() => {
                             setMobileNavOpen(false);
-                            storage.clearAuth();
-                            onLogout();
-                            navigate("/login");
+                            void (async () => {
+                                try {
+                                    await apiRequest("/api/auth/logout", { method: "POST" });
+                                } catch {
+                                    // 忽略退出阶段网络波动，优先清理本地状态
+                                } finally {
+                                    storage.clearAuth();
+                                    onLogout();
+                                    navigate("/login");
+                                }
+                            })();
                         }}
                     >
                         退出登录

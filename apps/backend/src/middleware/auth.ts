@@ -1,8 +1,10 @@
 import type { NextFunction, Response } from "express";
+import dayjs from "dayjs";
 import { ROLES, type Role } from "../constants.js";
 import { db } from "../db.js";
 import type { AuthedRequest } from "../types.js";
-import { verifyToken } from "../utils/auth.js";
+import { verifyAccessToken } from "../utils/auth.js";
+import { validateSessionForAccess } from "../utils/sessionAuth.js";
 
 export const requireAuth = (req: AuthedRequest, res: Response, next: NextFunction): void => {
     const header = req.headers.authorization;
@@ -12,13 +14,67 @@ export const requireAuth = (req: AuthedRequest, res: Response, next: NextFunctio
     }
 
     const token = header.slice(7);
-    const user = verifyToken(token);
-    if (!user) {
+    const payload = verifyAccessToken(token);
+    if (!payload) {
         res.status(401).json({ success: false, message: "令牌无效或已过期" });
         return;
     }
 
-    req.user = user;
+    const sessionState = validateSessionForAccess(payload.sessionId, payload.user.id);
+    if (!sessionState.ok || !sessionState.session) {
+        res.status(401).json({ success: false, message: "登录会话已失效，请重新登录" });
+        return;
+    }
+
+    const currentUser = db.prepare(
+        `SELECT id,
+                username,
+                display_name as displayName,
+                role,
+                linked_student_id as linkedStudentId,
+                must_change_password as mustChangePassword,
+                password_reset_at as passwordResetAt,
+                is_active as isActive
+         FROM users
+         WHERE id = ?`
+    ).get(payload.user.id) as
+        | {
+            id: number;
+            username: string;
+            displayName: string;
+            role: Role;
+            linkedStudentId: number | null;
+            mustChangePassword: number;
+            passwordResetAt: string | null;
+            isActive: number;
+        }
+        | undefined;
+
+    if (!currentUser || !currentUser.isActive) {
+        res.status(401).json({ success: false, message: "账号已失效，请重新登录" });
+        return;
+    }
+
+    if (currentUser.passwordResetAt && dayjs(currentUser.passwordResetAt).isAfter(dayjs(sessionState.session.createdAt))) {
+        res.status(401).json({ success: false, message: "密码已变更，请重新登录" });
+        return;
+    }
+
+    req.sessionId = payload.sessionId;
+    req.sessionExpiresAt = sessionState.session.expiresAt;
+    req.user = {
+        id: currentUser.id,
+        username: currentUser.username,
+        displayName: currentUser.displayName,
+        role: currentUser.role,
+        linkedStudentId: currentUser.linkedStudentId,
+        mustChangePassword: Boolean(currentUser.mustChangePassword)
+    };
+    db.prepare(`UPDATE auth_sessions SET last_used_at = ?, updated_at = ? WHERE id = ?`).run(
+        dayjs().toISOString(),
+        dayjs().toISOString(),
+        payload.sessionId
+    );
     next();
 };
 

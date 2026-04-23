@@ -519,6 +519,7 @@ export const AccountPanel = () => {
                     <label>
                         新密码
                         <input type="password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))} minLength={8} required />
+                        <small>建议至少 8 位，并同时包含大写字母、小写字母、数字和特殊字符。</small>
                     </label>
                     <label>
                         确认新密码

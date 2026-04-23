@@ -12,6 +12,8 @@ export type AuthUser = {
 
 export type AuthedRequest = Request & {
   user?: AuthUser;
+  sessionId?: number;
+  sessionExpiresAt?: string;
 };
 
 export type ApiResponse<T> = {

@@ -1,17 +1,4 @@
-import { storage } from "./storage";
-
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").trim();
-
-const buildRequestUrl = (path: string): string => {
-    const normalizedBase = API_BASE.replace(/\/+$/, "");
-    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-
-    if (normalizedBase.endsWith("/api") && normalizedPath.startsWith("/api/")) {
-        return `${normalizedBase}${normalizedPath.slice(4)}`;
-    }
-
-    return `${normalizedBase}${normalizedPath}`;
-};
+import { fetchWithAuth } from "./api";
 
 const triggerBrowserDownload = (blob: Blob, filename: string): void => {
     const url = URL.createObjectURL(blob);
@@ -27,17 +14,8 @@ export const downloadExport = async (
     filenamePrefix: string,
     format: "csv" | "json" = "csv"
 ): Promise<void> => {
-    const token = storage.getToken();
-    if (!token) {
-        throw new Error("请先登录");
-    }
-
     const target = endpoint.includes("?") ? `${endpoint}&format=${format}` : `${endpoint}?format=${format}`;
-    const response = await fetch(buildRequestUrl(target), {
-        headers: {
-            Authorization: `Bearer ${token}`
-        }
-    });
+    const response = await fetchWithAuth(target);
 
     if (!response.ok) {
         const message = await response.text();
@@ -49,16 +27,7 @@ export const downloadExport = async (
 };
 
 export const downloadFile = async (endpoint: string, fallbackFilename: string): Promise<void> => {
-    const token = storage.getToken();
-    if (!token) {
-        throw new Error("请先登录");
-    }
-
-    const response = await fetch(buildRequestUrl(endpoint), {
-        headers: {
-            Authorization: `Bearer ${token}`
-        }
-    });
+    const response = await fetchWithAuth(endpoint);
 
     if (!response.ok) {
         const message = await response.text();
@@ -78,15 +47,9 @@ export const downloadPostFile = async (
     body: unknown,
     fallbackFilename: string
 ): Promise<{ skippedCount: number }> => {
-    const token = storage.getToken();
-    if (!token) {
-        throw new Error("请先登录");
-    }
-
-    const response = await fetch(buildRequestUrl(endpoint), {
+    const response = await fetchWithAuth(endpoint, {
         method: "POST",
         headers: {
-            Authorization: `Bearer ${token}`,
             "Content-Type": "application/json"
         },
         body: JSON.stringify(body)

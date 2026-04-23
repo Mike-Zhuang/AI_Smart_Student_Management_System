@@ -8,6 +8,7 @@ import { canAccessStudent, requireAuth, requireRole } from "../middleware/auth.j
 import { callZhipu, streamZhipu } from "../services/zhipu.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { assertSafeBusinessText, validatePlainInput } from "../utils/contentSafety.js";
 import { normalizeClassName, repairText, sanitizeModelInputText } from "../utils/text.js";
 
 const createMessageSchema = z.object({
@@ -219,6 +220,8 @@ homeSchoolRouter.post("/messages", requireAuth, requireRole(ROLES.ADMIN, ROLES.T
     }
 
     const input = parsed.data;
+    const safeTitle = assertSafeBusinessText(input.title, { fieldName: "消息标题", required: true, maxLength: 120 });
+    const safeContent = assertSafeBusinessText(input.content, { fieldName: "消息内容", required: true, maxLength: 2000 });
     db.prepare(
         `INSERT INTO messages (sender_user_id, receiver_user_id, receiver_role, title, content, module, created_at, is_read)
          VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
@@ -226,8 +229,8 @@ homeSchoolRouter.post("/messages", requireAuth, requireRole(ROLES.ADMIN, ROLES.T
         req.user.id,
         input.receiverUserId ?? null,
         input.receiverRole ?? null,
-        repairText(input.title),
-        repairText(input.content),
+        safeTitle,
+        safeContent,
         "home-school",
         dayjs().toISOString()
     );
@@ -418,6 +421,9 @@ homeSchoolRouter.post("/leave-requests", requireAuth, (req: AuthedRequest, res) 
     }
 
     const isParentInitiated = req.user.role === ROLES.PARENT || req.user.role === ROLES.ADMIN || req.user.role === ROLES.HEAD_TEACHER;
+    const safeReason = assertSafeBusinessText(input.reason, { fieldName: "请假原因", required: true, maxLength: 500 });
+    const safeEmergencyContact = assertSafeBusinessText(input.emergencyContact, { fieldName: "紧急联系人", required: true, maxLength: 80 });
+    const safeContactPhone = validatePlainInput(input.contactPhone, { fieldName: "联系电话", required: true, maxLength: 30 });
     db.prepare(
         `INSERT INTO leave_requests (
             student_id, parent_user_id, requester_user_id, requester_role, leave_type, reason,
@@ -432,13 +438,13 @@ homeSchoolRouter.post("/leave-requests", requireAuth, (req: AuthedRequest, res) 
         req.user.id,
         req.user.role,
         input.leaveType,
-        repairText(input.reason),
+        safeReason,
         input.startAt.slice(0, 10),
         input.endAt.slice(0, 10),
         input.startAt,
         input.endAt,
-        repairText(input.contactPhone),
-        repairText(input.emergencyContact),
+        safeContactPhone,
+        safeEmergencyContact,
         isParentInitiated ? "pending_head_teacher_review" : "pending_parent_confirm",
         isParentInitiated ? "confirmed" : "pending",
         isParentInitiated ? "家长已确认信息" : null,
@@ -495,7 +501,7 @@ homeSchoolRouter.patch("/leave-requests/:id/parent-confirm", requireAuth, (req: 
     ).run(
         req.user.id,
         parsed.data.status,
-        repairText(parsed.data.note),
+        assertSafeBusinessText(parsed.data.note, { fieldName: "家长确认备注", required: true, maxLength: 300 }),
         dayjs().toISOString(),
         parsed.data.status === "confirmed" ? "pending_head_teacher_review" : "rejected",
         nextStatus,
@@ -531,7 +537,14 @@ homeSchoolRouter.patch("/leave-requests/:id/review", requireAuth, requireRole(RO
         `UPDATE leave_requests
          SET review_status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ?, status = ?
          WHERE id = ?`
-    ).run(parsed.data.status, repairText(parsed.data.reviewNote), req.user.id, dayjs().toISOString(), parsed.data.status, leaveId);
+    ).run(
+        parsed.data.status,
+        assertSafeBusinessText(parsed.data.reviewNote, { fieldName: "审批备注", required: true, maxLength: 300 }),
+        req.user.id,
+        dayjs().toISOString(),
+        parsed.data.status,
+        leaveId
+    );
 
     res.json({ success: true, message: parsed.data.status === "approved" ? "请假已批准" : "请假已驳回" });
 });
@@ -560,7 +573,11 @@ homeSchoolRouter.patch("/leave-requests/:id/complete", requireAuth, (req: Authed
         `UPDATE leave_requests
          SET completion_status = 'completed', completed_at = ?, status = 'completed', review_note = COALESCE(review_note, ?)
          WHERE id = ?`
-    ).run(dayjs().toISOString(), repairText(parsed.data.completionNote ?? "学生已返校销假"), leaveId);
+    ).run(
+        dayjs().toISOString(),
+        assertSafeBusinessText(parsed.data.completionNote ?? "学生已返校销假", { fieldName: "销假备注", required: true, maxLength: 200 }),
+        leaveId
+    );
 
     res.json({ success: true, message: "已完成返校销假" });
 });

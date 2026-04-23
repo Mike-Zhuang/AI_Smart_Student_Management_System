@@ -50,6 +50,12 @@ const createSchema = (): void => {
       must_change_password INTEGER NOT NULL DEFAULT 0,
       password_reset_at TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
+      failed_login_count INTEGER NOT NULL DEFAULT 0,
+      last_failed_login_at TEXT,
+      locked_until TEXT,
+      last_login_at TEXT,
+      last_login_ip TEXT,
+      last_login_user_agent TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -360,6 +366,44 @@ const createSchema = (): void => {
 
         CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created_at
             ON chat_messages(session_id, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      refresh_token_hash TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      expires_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL,
+      revoked_at TEXT,
+      revoke_reason TEXT,
+      replace_by_session_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id
+      ON auth_sessions(user_id, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at
+      ON auth_sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS risk_challenges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_hash TEXT UNIQUE NOT NULL,
+      username TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      question TEXT NOT NULL,
+      answer_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_risk_challenges_expires_at
+      ON risk_challenges(expires_at);
   `);
 };
 
@@ -925,6 +969,24 @@ export const initDatabase = (): void => {
     if (!userColumns.some((item) => item.name === "is_active")) {
         db.exec(`ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1`);
     }
+    if (!userColumns.some((item) => item.name === "failed_login_count")) {
+        db.exec(`ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!userColumns.some((item) => item.name === "last_failed_login_at")) {
+        db.exec(`ALTER TABLE users ADD COLUMN last_failed_login_at TEXT`);
+    }
+    if (!userColumns.some((item) => item.name === "locked_until")) {
+        db.exec(`ALTER TABLE users ADD COLUMN locked_until TEXT`);
+    }
+    if (!userColumns.some((item) => item.name === "last_login_at")) {
+        db.exec(`ALTER TABLE users ADD COLUMN last_login_at TEXT`);
+    }
+    if (!userColumns.some((item) => item.name === "last_login_ip")) {
+        db.exec(`ALTER TABLE users ADD COLUMN last_login_ip TEXT`);
+    }
+    if (!userColumns.some((item) => item.name === "last_login_user_agent")) {
+        db.exec(`ALTER TABLE users ADD COLUMN last_login_user_agent TEXT`);
+    }
 
     const studentColumns = db.prepare(`PRAGMA table_info(students)`).all() as Array<{ name: string }>;
     if (!studentColumns.some((item) => item.name === "academic_stage")) {
@@ -1104,6 +1166,8 @@ export const initDatabase = (): void => {
          )`
     ).run(expireBefore);
     db.prepare(`DELETE FROM chat_sessions WHERE updated_at < ?`).run(expireBefore);
+    db.prepare(`DELETE FROM auth_sessions WHERE expires_at < ? OR revoked_at IS NOT NULL AND updated_at < ?`).run(expireBefore, expireBefore);
+    db.prepare(`DELETE FROM risk_challenges WHERE expires_at < ? OR used_at IS NOT NULL`).run(dayjs().toISOString());
 };
 
 const getAppMeta = (key: string): string | null => {

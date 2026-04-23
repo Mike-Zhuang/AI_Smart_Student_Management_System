@@ -13,12 +13,16 @@ type AuditInput = {
 };
 
 export const extractIp = (req: Request): string => {
-    const forwarded = req.headers["x-forwarded-for"];
-    if (typeof forwarded === "string" && forwarded.length > 0) {
-        return forwarded.split(",")[0]?.trim() || req.ip || "unknown";
+    if (req.ip) {
+        return req.ip;
     }
 
-    return req.ip || "unknown";
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.length > 0) {
+        return forwarded.split(",")[0]?.trim() || "unknown";
+    }
+
+    return "unknown";
 };
 
 export const logAudit = (input: AuditInput): void => {

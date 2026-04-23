@@ -1,5 +1,6 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { bootstrapAuthSession } from "./lib/api";
 import type { User } from "./lib/types";
 import { storage } from "./lib/storage";
 import { LoginPage } from "./pages/LoginPage";
@@ -23,6 +24,7 @@ const AuthProvider = ({ children, value }: { children: ReactNode; value: AuthCon
 
 function App() {
   const [user, setUserState] = useState<User | null>(storage.getUser());
+  const [initializing, setInitializing] = useState(true);
 
   const setUser = (next: User | null): void => {
     setUserState(next);
@@ -33,7 +35,27 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const nextUser = await bootstrapAuthSession();
+      if (!active) {
+        return;
+      }
+      setUserState(nextUser);
+      setInitializing(false);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const value = useMemo(() => ({ user, setUser }), [user]);
+
+  if (initializing) {
+    return <div className="auth-page"><div className="auth-card"><h1>正在校验登录状态</h1><p>请稍候，系统正在恢复安全会话。</p></div></div>;
+  }
 
   return (
     <AuthProvider value={value}>

@@ -7,9 +7,12 @@ import { Router, type Response } from "express";
 import { z } from "zod";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
+import { uploadRateLimit } from "../middleware/rateLimit.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import type { AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { assertSafeBusinessText } from "../utils/contentSafety.js";
+import { assertSafeUploadFile, createMulterFileSizeLimit } from "../utils/fileSecurity.js";
 import { normalizeClassName, repairText } from "../utils/text.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,7 +25,7 @@ if (!fs.existsSync(uploadDir)) {
 
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 8 * 1024 * 1024 }
+    limits: { fileSize: createMulterFileSizeLimit() }
 });
 
 const classProfileSchema = z.object({
@@ -105,17 +108,22 @@ const assertClassAccess = (req: AuthedRequest, className: string, res: Response)
     return true;
 };
 
-const saveUpload = (file: Express.Multer.File | undefined, prefix: string): { fileName: string | null; filePath: string | null } => {
+const saveUpload = (
+    file: Express.Multer.File | undefined,
+    prefix: string,
+    category: "wellbeing-attachment" | "gallery-image"
+): { fileName: string | null; filePath: string | null } => {
     if (!file) {
         return { fileName: null, filePath: null };
     }
 
-    const extension = path.extname(file.originalname) || ".dat";
+    const safeUpload = assertSafeUploadFile(file, category);
+    const extension = safeUpload.extension || ".dat";
     const safeName = `${prefix}-${Date.now()}${extension}`;
     const absolutePath = path.join(uploadDir, safeName);
     fs.writeFileSync(absolutePath, file.buffer);
     return {
-        fileName: repairText(file.originalname),
+        fileName: repairText(safeUpload.sanitizedName),
         filePath: absolutePath
     };
 };
@@ -288,13 +296,13 @@ headTeacherRouter.patch("/class-profile", (req: AuthedRequest, res) => {
             updated_at = excluded.updated_at`
     ).run(
         className,
-        repairText(input.classMotto ?? ""),
-        repairText(input.classStyle ?? ""),
-        repairText(input.classSlogan ?? ""),
-        repairText(input.courseSchedule ?? ""),
-        repairText(input.classRules ?? ""),
-        repairText(input.seatMap ?? ""),
-        repairText(input.classCommittee ?? ""),
+        assertSafeBusinessText(input.classMotto ?? "", { fieldName: "班级格言", maxLength: 120 }),
+        assertSafeBusinessText(input.classStyle ?? "", { fieldName: "班风", maxLength: 200 }),
+        assertSafeBusinessText(input.classSlogan ?? "", { fieldName: "班级口号", maxLength: 120 }),
+        assertSafeBusinessText(input.courseSchedule ?? "", { fieldName: "课程表", maxLength: 2000 }),
+        assertSafeBusinessText(input.classRules ?? "", { fieldName: "班级公约", maxLength: 2000 }),
+        assertSafeBusinessText(input.seatMap ?? "", { fieldName: "座位表", maxLength: 2000 }),
+        assertSafeBusinessText(input.classCommittee ?? "", { fieldName: "班委会", maxLength: 2000 }),
         req.user.id,
         dayjs().toISOString()
     );
@@ -350,9 +358,9 @@ headTeacherRouter.post("/class-logs", (req: AuthedRequest, res) => {
         className,
         input.studentId ?? null,
         repairText(input.studentName ?? ""),
-        repairText(input.category),
-        repairText(input.title),
-        repairText(input.content),
+        assertSafeBusinessText(input.category, { fieldName: "日志分类", required: true, maxLength: 60 }),
+        assertSafeBusinessText(input.title, { fieldName: "日志标题", required: true, maxLength: 120 }),
+        assertSafeBusinessText(input.content, { fieldName: "日志内容", required: true, maxLength: 2000 }),
         input.recordDate,
         req.user.id,
         dayjs().toISOString()
@@ -399,7 +407,7 @@ headTeacherRouter.get("/wellbeing-posts", (req: AuthedRequest, res) => {
     res.json({ success: true, message: "查询成功", data: rows });
 });
 
-headTeacherRouter.post("/wellbeing-posts", upload.single("file"), (req: AuthedRequest, res) => {
+headTeacherRouter.post("/wellbeing-posts", uploadRateLimit, upload.single("file"), (req: AuthedRequest, res) => {
     if (!req.user) {
         res.status(401).json({ success: false, message: "未登录" });
         return;
@@ -416,14 +424,20 @@ headTeacherRouter.post("/wellbeing-posts", upload.single("file"), (req: AuthedRe
         return;
     }
 
-    const uploadResult = saveUpload(req.file, `wellbeing-${className}`);
+    let uploadResult;
+    try {
+        uploadResult = saveUpload(req.file, `wellbeing-${className}`, "wellbeing-attachment");
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "附件校验失败" });
+        return;
+    }
     db.prepare(
         `INSERT INTO wellbeing_posts (class_name, title, content, attachment_name, attachment_path, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
         className,
-        repairText(parsed.data.title),
-        repairText(parsed.data.content),
+        assertSafeBusinessText(parsed.data.title, { fieldName: "心灵驿站标题", required: true, maxLength: 120 }),
+        assertSafeBusinessText(parsed.data.content, { fieldName: "心灵驿站内容", required: true, maxLength: 2000 }),
         uploadResult.fileName,
         uploadResult.filePath,
         req.user.id,
@@ -510,10 +524,10 @@ headTeacherRouter.post("/group-score-records", (req: AuthedRequest, res) => {
          VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
         className,
-        repairText(input.groupName),
-        repairText(input.activityName),
+        assertSafeBusinessText(input.groupName, { fieldName: "小组名称", required: true, maxLength: 60 }),
+        assertSafeBusinessText(input.activityName, { fieldName: "活动名称", required: true, maxLength: 120 }),
         input.scoreDelta,
-        repairText(input.note ?? ""),
+        assertSafeBusinessText(input.note ?? "", { fieldName: "备注", maxLength: 300 }),
         req.user.id,
         dayjs().toISOString()
     );
@@ -560,7 +574,7 @@ headTeacherRouter.get("/gallery", (req: AuthedRequest, res) => {
     res.json({ success: true, message: "查询成功", data: rows });
 });
 
-headTeacherRouter.post("/gallery", upload.single("file"), (req: AuthedRequest, res) => {
+headTeacherRouter.post("/gallery", uploadRateLimit, upload.single("file"), (req: AuthedRequest, res) => {
     if (!req.user) {
         res.status(401).json({ success: false, message: "未登录" });
         return;
@@ -577,14 +591,20 @@ headTeacherRouter.post("/gallery", upload.single("file"), (req: AuthedRequest, r
         return;
     }
 
-    const uploadResult = saveUpload(req.file, `gallery-${className}`);
+    let uploadResult;
+    try {
+        uploadResult = saveUpload(req.file, `gallery-${className}`, "gallery-image");
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "图片校验失败" });
+        return;
+    }
     db.prepare(
         `INSERT INTO class_gallery (class_name, title, description, activity_date, file_name, file_path, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
         className,
-        repairText(parsed.data.title),
-        repairText(parsed.data.description ?? ""),
+        assertSafeBusinessText(parsed.data.title, { fieldName: "风采标题", required: true, maxLength: 120 }),
+        assertSafeBusinessText(parsed.data.description ?? "", { fieldName: "风采描述", maxLength: 1000 }),
         parsed.data.activityDate ?? null,
         uploadResult.fileName,
         uploadResult.filePath,

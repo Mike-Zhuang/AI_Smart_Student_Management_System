@@ -7,6 +7,7 @@ import path from "node:path";
 import multer from "multer";
 import XLSX from "xlsx";
 import { z } from "zod";
+import { securityConfig } from "../config/security.js";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
@@ -14,6 +15,8 @@ import type { AuthedRequest } from "../types.js";
 import { createIssuanceBatch } from "../utils/accountIssuance.js";
 import { deleteUserWithIssuance } from "../utils/accountMaintenance.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { assertSafeBusinessText, validatePlainInput } from "../utils/contentSafety.js";
+import { assertSafeUploadFile, createMulterFileSizeLimit } from "../utils/fileSecurity.js";
 import { generateTemporaryPassword, hashPassword } from "../utils/auth.js";
 import { decodeTextBuffer, normalizeClassName, normalizeExamName, normalizeName, repairRecordStrings, repairText } from "../utils/text.js";
 
@@ -110,7 +113,7 @@ const teacherRowSchema = z.object({
 
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 8 * 1024 * 1024 },
+    limits: { fileSize: createMulterFileSizeLimit() },
     fileFilter: (_req, file, callback) => {
         const mime = file.mimetype.toLowerCase();
         const filename = file.originalname.toLowerCase();
@@ -166,6 +169,7 @@ const cleanCell = (value: unknown): string => {
         .replace(/^\uFEFF/, "")
         .replace(/\u00A0/g, " ")
         .replace(/\r/g, "")
+        .slice(0, securityConfig.importMaxCellLength)
         .trim();
 };
 
@@ -237,6 +241,7 @@ const resolveRows = (req: AuthedRequest): { rows: SheetRecord[]; lineOffset: num
         try {
             const filename = req.file.originalname.toLowerCase();
             const isXlsx = filename.endsWith(".xlsx");
+            assertSafeUploadFile(req.file, "data-import");
             return {
                 rows: isXlsx ? parseXlsxRows(req.file.buffer) : parseCsvRows(req.file.buffer),
                 lineOffset: 2,
@@ -297,7 +302,20 @@ const parseStudentRow = (row: SheetRecord, line: number, errors: ImportErrorItem
         return null;
     }
 
-    return parsed.data;
+    return {
+        ...parsed.data,
+        interests: parsed.data.interests ? assertSafeBusinessText(parsed.data.interests, { fieldName: "兴趣", maxLength: 300 }) : undefined,
+        careerGoal: parsed.data.careerGoal ? assertSafeBusinessText(parsed.data.careerGoal, { fieldName: "职业目标", maxLength: 300 }) : undefined,
+        displayName: parsed.data.displayName ? assertSafeBusinessText(parsed.data.displayName, { fieldName: "显示名", maxLength: 40 }) : undefined,
+        loginUsername: parsed.data.loginUsername
+            ? validatePlainInput(parsed.data.loginUsername, {
+                fieldName: "登录账号",
+                required: true,
+                maxLength: 40,
+                pattern: /^[A-Za-z0-9_.-]{4,40}$/
+            })
+            : undefined
+    };
 };
 
 const parseExamRow = (row: SheetRecord, line: number, errors: ImportErrorItem[]): ExamImportRow | null => {
@@ -358,6 +376,14 @@ const parseTeacherRow = (row: SheetRecord, line: number, errors: ImportErrorItem
 
     return {
         ...parsed.data,
+        teacherUsername: validatePlainInput(parsed.data.teacherUsername, {
+            fieldName: "教师登录账号",
+            required: true,
+            maxLength: 40,
+            pattern: /^[A-Za-z0-9_.-]{2,40}$/
+        }),
+        displayName: assertSafeBusinessText(parsed.data.displayName, { fieldName: "教师姓名", required: true, maxLength: 40 }),
+        subjectName: parsed.data.subjectName ? assertSafeBusinessText(parsed.data.subjectName, { fieldName: "任教学科", maxLength: 40 }) : undefined,
         isHeadTeacher: flag
     };
 };
@@ -374,6 +400,12 @@ const buildSummary = (total: number): ImportSummary => ({
     accountExisting: 0,
     issuanceRecords: []
 });
+
+const assertImportSizeSafe = (rows: SheetRecord[]): void => {
+    if (rows.length > securityConfig.importMaxRows) {
+        throw new Error(`单次导入最多支持 ${securityConfig.importMaxRows} 行`);
+    }
+};
 
 const calcFailedLineCount = (errors: ImportErrorItem[]): number => new Set(errors.map((item) => item.line)).size;
 
@@ -666,6 +698,12 @@ dataImportRouter.post("/students", uploadSheet, (req: AuthedRequest, res) => {
         res.status(400).json({ success: false, message: "请上传 CSV/XLSX 文件，或传入 JSON 格式 rows 数组" });
         return;
     }
+    try {
+        assertImportSizeSafe(resolved.rows);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "导入数据超出限制" });
+        return;
+    }
 
     const { rows, lineOffset, source } = resolved;
     const summary = buildSummary(rows.length);
@@ -762,6 +800,12 @@ dataImportRouter.post("/exam-results", uploadSheet, (req: AuthedRequest, res) =>
         res.status(400).json({ success: false, message: "请上传 CSV/XLSX 文件，或传入 JSON 格式 rows 数组" });
         return;
     }
+    try {
+        assertImportSizeSafe(resolved.rows);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "导入数据超出限制" });
+        return;
+    }
 
     const { rows, lineOffset, source } = resolved;
     const summary = buildSummary(rows.length);
@@ -830,6 +874,12 @@ dataImportRouter.post("/teachers", uploadSheet, (req: AuthedRequest, res) => {
     const resolved = resolveRows(req);
     if (!resolved) {
         res.status(400).json({ success: false, message: "请上传 CSV/XLSX 文件，或传入 JSON 格式 rows 数组" });
+        return;
+    }
+    try {
+        assertImportSizeSafe(resolved.rows);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "导入数据超出限制" });
         return;
     }
 

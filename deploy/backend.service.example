@@ -6,8 +6,15 @@ After=network.target
 Type=simple
 User=www-data
 WorkingDirectory=/opt/management-system/apps/backend
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
 Environment=PORT=4000
-Environment=JWT_SECRET=change-me
+Environment=TRUST_PROXY=loopback
+Environment=ACCESS_TOKEN_SECRET=change-me-access
+Environment=REFRESH_TOKEN_SECRET=change-me-refresh
+Environment=ACCOUNT_ARCHIVE_SECRET=change-me-archive
+Environment=COOKIE_SECURE=true
+Environment=ALLOWED_ORIGINS=https://your-domain.example
 ExecStart=/usr/bin/npm run start
 Restart=always
 RestartSec=5

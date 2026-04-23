@@ -1,5 +1,4 @@
-import { resolveApiUrl } from "./api";
-import { storage } from "./storage";
+import { fetchWithAuth } from "./api";
 import type { StreamCompletePayload } from "./ai";
 
 type StreamEventHandlers = {
@@ -36,13 +35,9 @@ export const consumeSseStream = async (
     },
     handlers: StreamEventHandlers = {}
 ): Promise<StreamCompletePayload> => {
-    const token = storage.getToken();
-    const response = await fetch(resolveApiUrl(path), {
+    const response = await fetchWithAuth(path, {
         method: options.method ?? "POST",
-        headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            ...(options.headers ?? {})
-        },
+        headers: options.headers,
         body: options.body,
         signal: options.signal
     });

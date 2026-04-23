@@ -468,3 +468,36 @@
   - 新增 `apps/frontend/src/components/OrgStructurePanel.tsx`，并在 `AppShell.tsx`、`DashboardPage.tsx` 增加“组织架构”导航与路由。
   - `apps/frontend/src/components/DataImportPanel.tsx` 补充“查看本次发放批次”入口；`apps/frontend/src/lib/export.ts` 新增 POST 下载能力，支持读取下载文件名与跳过数量。
   - 更新 `apps/frontend/src/styles.css`、`README.md`、`GUIDE.md`、`docs/defense-demo-script.md`，同步组织架构与账号发放批次的真实使用说明。
+
+## 2026-04-23 20:41:36 +0800
+
+- 生产级安全基线加固第一轮落地：
+  - 后端认证升级为短时 access token + HttpOnly refresh cookie + `auth_sessions` 会话表，新增 `POST /api/auth/refresh`、`POST /api/auth/logout`、`POST /api/auth/logout-all`、`GET /api/auth/session-status`。
+  - `apps/backend/src/db.ts` 为 `users` 增加登录风控字段（失败次数、锁定时间、最近登录信息），新增 `risk_challenges` 表并补齐平滑迁移。
+  - `apps/backend/src/middleware/auth.ts` 改为会话感知鉴权，校验账号启停、密码重置后旧会话失效，并回写 `last_used_at`。
+  - `apps/backend/src/middleware/rateLimit.ts` 重构为分场景限流，覆盖读 / 写 / AI / 上传 / 认证，并增加登录 IP 与 username+IP 双维失败追踪。
+  - `apps/backend/src/routes/auth.ts` 新增风险挑战、登录失败锁定、会话轮换、登出、生产环境禁用 `demo-accounts`，同时在改密/重置密码时自动吊销旧会话。
+- 文本与上传安全收口：
+  - 新增 `apps/backend/src/config/security.ts`、`apps/backend/src/config/sensitiveWords.ts`、`apps/backend/src/utils/contentSafety.ts`、`apps/backend/src/utils/fileSecurity.ts`、`apps/backend/src/utils/sessionAuth.ts`。
+  - `apps/backend/src/routes/homeSchool.ts`、`apps/backend/src/routes/headTeacher.ts`、`apps/backend/src/routes/ai.ts`、`apps/backend/src/routes/dataImport.ts` 接入敏感词拦截、输入规范化、上传文件白名单与文件头校验、导入行数/列长限制。
+  - `apps/backend/src/routes/admin.ts` 收紧审计查询 `limit` 上限，降低数据枚举滥用风险。
+- 前端登录态与安全体验升级：
+  - `apps/frontend/src/lib/storage.ts` 将 access token 改为 `sessionStorage` 保存。
+  - `apps/frontend/src/lib/api.ts` 重写为统一 `fetchWithAuth` 封装，支持 `401 -> refresh -> 重试 -> 失败清空本地态并跳转登录页`。
+  - `apps/frontend/src/lib/export.ts`、`apps/frontend/src/lib/sse.ts` 改为复用统一鉴权链路，下载与 SSE 也支持会话自动恢复。
+  - `apps/frontend/src/App.tsx` 启动时先做安全会话恢复；`apps/frontend/src/pages/LoginPage.tsx` 增加风险挑战、蜜罐字段、最短提交耗时与强密码提示；`apps/frontend/src/components/AppShell.tsx` 退出登录改为调用后端登出接口。
+  - `apps/frontend/src/components/AccountPanel.tsx` 新增强密码提示；`apps/frontend/index.html` 补充 CSP、Referrer-Policy、Permissions-Policy、X-Frame-Options、COOP 等前端安全头元信息。
+- 部署与文档同步：
+  - 重写 `apps/backend/.env.example`，补充生产环境所需安全环境变量。
+  - 更新 `deploy/nginx.conf.example` 与 `deploy/backend.service.example`，增加 HTTPS 反代、安全响应头、限流示例、代理头与生产环境变量。
+  - 更新 `README.md` 与 `GUIDE.md`，补充自动刷新会话、风险挑战、强密码要求与导入安全说明。
+- 验证结果：
+  - 执行 `npm run build -w @ms/backend` 通过。
+  - 执行 `npm run build -w @ms/frontend` 通过。
+
+## 2026-04-23 20:48:31 +0800
+
+- 修复本地调试与开发态白屏问题：
+  - 移除 `apps/frontend/index.html` 中通过 `meta` 注入的 CSP、X-Frame-Options、COOP 等安全头，避免开发环境下 Vite 内联样式与资源加载被误拦截；生产安全头继续由后端与 Nginx 通过响应头下发。
+  - `apps/backend/src/server.ts` 为端口监听增加显式错误处理，`EADDRINUSE` 时输出中文可读提示，帮助快速定位本地已有旧进程占用 `4000` 端口的问题。
+  - `apps/backend/src/routes/auth.ts` 的 `/api/auth/refresh` 增加 refresh token 预校验与异常兜底，避免浏览器残留旧 cookie 或畸形 token 直接打成 500。

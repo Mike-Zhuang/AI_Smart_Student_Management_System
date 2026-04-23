@@ -24,8 +24,10 @@
 
 - 默认不再自动填充账号密码
 - 支持密码显示/隐藏切换
+- 系统会在高风险登录场景下触发附加安全校验
 - 不开放公开注册，账号由后台统一发放
 - 若是通过导入生成的新账号，可在“我的账号 → 账号发放台账”查看登录账号、历史批次与未改密账号的再次下载入口
+- 首次登录后建议立即修改为“大小写字母 + 数字 + 特殊字符”的强密码
 
 ### 1.3 快速体验路径（建议）
 
@@ -432,6 +434,10 @@
 认证与用户：
 
 - POST /api/auth/login
+- GET /api/auth/risk-challenge
+- POST /api/auth/refresh
+- POST /api/auth/logout
+- POST /api/auth/logout-all
 - POST /api/auth/register
 - GET /api/auth/accounts
 - POST /api/auth/accounts/:id/reset-password

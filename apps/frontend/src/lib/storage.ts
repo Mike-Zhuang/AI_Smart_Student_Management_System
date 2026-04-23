@@ -5,9 +5,9 @@ const USER_KEY = "ms_user";
 const API_KEY = "ms_zhipu_api_key";
 
 export const storage = {
-  getToken: (): string | null => localStorage.getItem(TOKEN_KEY),
-  setToken: (value: string): void => localStorage.setItem(TOKEN_KEY, value),
-  removeToken: (): void => localStorage.removeItem(TOKEN_KEY),
+  getToken: (): string | null => sessionStorage.getItem(TOKEN_KEY),
+  setToken: (value: string): void => sessionStorage.setItem(TOKEN_KEY, value),
+  removeToken: (): void => sessionStorage.removeItem(TOKEN_KEY),
 
   getUser: (): User | null => {
     const raw = localStorage.getItem(USER_KEY);

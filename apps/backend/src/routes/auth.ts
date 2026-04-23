@@ -1,23 +1,45 @@
 import { Router } from "express";
 import dayjs from "dayjs";
 import { z } from "zod";
+import { isProduction, securityConfig } from "../config/security.js";
 import { db } from "../db.js";
 import { ROLES } from "../constants.js";
 import { canAccessStudent, requireAuth, requireRole } from "../middleware/auth.js";
+import { assertAuthAttemptAllowed, clearAuthFailures, getAuthRiskState, recordAuthFailure } from "../middleware/rateLimit.js";
 import {
     buildIssuanceWorkbookBuffer,
     createIssuanceBatch,
     getDownloadableIssuanceItems,
     invalidateUserIssuancePasswords
 } from "../utils/accountIssuance.js";
-import { comparePassword, generateTemporaryPassword, hashPassword, signToken } from "../utils/auth.js";
+import {
+    clearRefreshTokenCookie,
+    comparePassword,
+    generateOpaqueToken,
+    generateTemporaryPassword,
+    getRefreshTokenFromCookie,
+    hashPassword,
+    setRefreshTokenCookie,
+    signAccessToken,
+    sha256,
+    verifyRefreshToken
+} from "../utils/auth.js";
 import type { AuthUser, AuthedRequest } from "../types.js";
 import { extractIp, logAudit } from "../utils/audit.js";
+import { assertSafeBusinessText, validatePlainInput } from "../utils/contentSafety.js";
+import { issueTokensAndCookie, revokeAllSessionsForUser, revokeSessionById, rotateRefreshSession } from "../utils/sessionAuth.js";
 import { repairRecordStrings, repairText } from "../utils/text.js";
 
+const USERNAME_PATTERN = /^[A-Za-z0-9_.-]{3,40}$/;
+const PHONE_PATTERN = /^[0-9+\-() ]{6,30}$/;
+
 const loginSchema = z.object({
-    username: z.string().min(3),
-    password: z.string().min(6)
+    username: z.string().min(3).max(40),
+    password: z.string().min(6).max(128),
+    honeypot: z.string().max(0).optional().default(""),
+    submittedAt: z.number().int().positive().optional(),
+    riskChallengeToken: z.string().min(20).max(200).optional(),
+    riskChallengeAnswer: z.string().min(1).max(20).optional()
 });
 
 const registerSchema = z.object({
@@ -57,6 +79,92 @@ const batchGenerateParentSchema = z.object({
 
 export const authRouter = Router();
 
+const validateStrongPassword = (password: string): void => {
+    if (password.length < 8 || password.length > 128) {
+        throw new Error("密码长度需在8到128位之间");
+    }
+    if (!/[A-Z]/.test(password)) {
+        throw new Error("新密码需至少包含1个大写字母");
+    }
+    if (!/[a-z]/.test(password)) {
+        throw new Error("新密码需至少包含1个小写字母");
+    }
+    if (!/[0-9]/.test(password)) {
+        throw new Error("新密码需至少包含1个数字");
+    }
+    if (!/[^A-Za-z0-9]/.test(password)) {
+        throw new Error("新密码需至少包含1个特殊字符");
+    }
+};
+
+const sanitizeUsername = (value: string): string => validatePlainInput(value, {
+    fieldName: "用户名",
+    required: true,
+    maxLength: 40,
+    pattern: USERNAME_PATTERN
+});
+
+const sanitizePhone = (value: string | undefined): string | null => {
+    if (value === undefined) {
+        return null;
+    }
+    const normalized = validatePlainInput(value, {
+        fieldName: "联系电话",
+        required: false,
+        maxLength: 30,
+        pattern: PHONE_PATTERN
+    });
+    return normalized || null;
+};
+
+const buildRiskQuestion = (): { question: string; answer: string } => {
+    const left = 3 + Math.floor(Math.random() * 7);
+    const right = 1 + Math.floor(Math.random() * 6);
+    const add = Math.random() > 0.35;
+    return add
+        ? { question: `${left} + ${right} = ?`, answer: String(left + right) }
+        : { question: `${left} - ${right} = ?`, answer: String(left - right) };
+};
+
+const createRiskChallenge = (username: string, ipAddress: string, userAgent: string): { token: string; question: string; expiresAt: string } => {
+    const token = generateOpaqueToken(24);
+    const qa = buildRiskQuestion();
+    const expiresAt = dayjs().add(securityConfig.riskChallengeTtlSeconds, "second").toISOString();
+    db.prepare(
+        `INSERT INTO risk_challenges (token_hash, username, ip_address, user_agent, question, answer_hash, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(sha256(token), username, ipAddress, userAgent, qa.question, sha256(qa.answer), expiresAt, dayjs().toISOString());
+    return { token, question: qa.question, expiresAt };
+};
+
+const consumeRiskChallenge = (input: {
+    username: string;
+    ipAddress: string;
+    userAgent: string;
+    token?: string;
+    answer?: string;
+}): void => {
+    const row = db.prepare(
+        `SELECT id, answer_hash as answerHash, expires_at as expiresAt, used_at as usedAt
+         FROM risk_challenges
+         WHERE token_hash = ? AND username = ? AND ip_address = ? AND user_agent = ?
+         ORDER BY id DESC
+         LIMIT 1`
+    ).get(sha256(input.token ?? ""), input.username, input.ipAddress, input.userAgent) as
+        | { id: number; answerHash: string; expiresAt: string; usedAt: string | null }
+        | undefined;
+
+    if (!row || row.usedAt || dayjs(row.expiresAt).isBefore(dayjs())) {
+        throw new Error("风险校验已失效，请重新获取");
+    }
+
+    if (sha256((input.answer ?? "").trim()) !== row.answerHash) {
+        throw new Error("风险校验答案错误");
+    }
+
+    db.prepare(`UPDATE risk_challenges SET used_at = ? WHERE id = ?`).run(dayjs().toISOString(), row.id);
+};
+
 const toAuthPayload = (user: {
     id: number;
     username: string;
@@ -83,6 +191,12 @@ const getUserById = (id: number) => {
                     must_change_password as mustChangePassword,
                     password_reset_at as passwordResetAt,
                     is_active as isActive,
+                    failed_login_count as failedLoginCount,
+                    last_failed_login_at as lastFailedLoginAt,
+                    locked_until as lockedUntil,
+                    last_login_at as lastLoginAt,
+                    last_login_ip as lastLoginIp,
+                    last_login_user_agent as lastLoginUserAgent,
                     created_at as createdAt
              FROM users
              WHERE id = ?`
@@ -100,7 +214,45 @@ const getUserById = (id: number) => {
             mustChangePassword: number;
             passwordResetAt: string | null;
             isActive: number;
+            failedLoginCount: number;
+            lastFailedLoginAt: string | null;
+            lockedUntil: string | null;
+            lastLoginAt: string | null;
+            lastLoginIp: string | null;
+            lastLoginUserAgent: string | null;
             createdAt: string;
+        }
+        | undefined;
+};
+
+const getUserByUsername = (username: string) => {
+    return db
+        .prepare(
+            `SELECT id, username, display_name as displayName, password_hash as passwordHash, role,
+                    linked_student_id as linkedStudentId,
+                    must_change_password as mustChangePassword,
+                    password_reset_at as passwordResetAt,
+                    is_active as isActive,
+                    failed_login_count as failedLoginCount,
+                    last_failed_login_at as lastFailedLoginAt,
+                    locked_until as lockedUntil
+             FROM users
+             WHERE username = ?`
+        )
+        .get(username) as
+        | {
+            id: number;
+            username: string;
+            displayName: string;
+            passwordHash: string;
+            role: AuthUser["role"];
+            linkedStudentId: number | null;
+            mustChangePassword: number;
+            passwordResetAt: string | null;
+            isActive: number;
+            failedLoginCount: number;
+            lastFailedLoginAt: string | null;
+            lockedUntil: string | null;
         }
         | undefined;
 };
@@ -193,10 +345,13 @@ const createParentAccountForStudent = (input: {
         throw new Error("学生不存在");
     }
 
-    const desiredUsername = input.username?.trim() || buildParentUsername(student.studentNo);
+    const desiredUsername = input.username ? sanitizeUsername(input.username) : buildParentUsername(student.studentNo);
     const username = findAvailableUsername(desiredUsername);
     const temporaryPassword = generateTemporaryPassword();
     const createdAt = dayjs().toISOString();
+    const displayName = assertSafeBusinessText(input.displayName, { fieldName: "家长显示名", required: true, maxLength: 40 });
+    const relation = assertSafeBusinessText(input.relation, { fieldName: "关系", required: true, maxLength: 20 });
+    const phone = input.phone ? sanitizePhone(input.phone) : null;
     const result = db.prepare(
         `INSERT INTO users (
             username,
@@ -213,10 +368,10 @@ const createParentAccountForStudent = (input: {
         VALUES (?, ?, ?, ?, NULL, ?, 1, ?, 1, ?)`
     ).run(
         username,
-        input.displayName.trim(),
+        displayName,
         hashPassword(temporaryPassword),
         ROLES.PARENT,
-        input.phone?.trim() || null,
+        phone,
         createdAt,
         createdAt
     );
@@ -225,7 +380,7 @@ const createParentAccountForStudent = (input: {
     db.prepare(
         `INSERT OR IGNORE INTO parent_student_links (parent_user_id, student_id, relation, created_at)
          VALUES (?, ?, ?, ?)`
-    ).run(parentUserId, student.id, input.relation.trim(), createdAt);
+    ).run(parentUserId, student.id, relation, createdAt);
     db.prepare(`UPDATE students SET parent_user_id = COALESCE(parent_user_id, ?) WHERE id = ?`).run(parentUserId, student.id);
 
     const issuanceBatchId = createIssuanceBatch(db, {
@@ -233,13 +388,13 @@ const createParentAccountForStudent = (input: {
         sourceModule: "auth",
         operatorUserId: input.operatorUserId,
         title: `家长账号发放 ${student.name} ${dayjs().format("YYYY-MM-DD HH:mm")}`,
-        note: `${input.displayName.trim()} 已绑定 ${student.name}`,
+        note: `${displayName} 已绑定 ${student.name}`,
         items: [
             {
                 userId: parentUserId,
                 username,
                 temporaryPassword,
-                displayName: input.displayName.trim(),
+                displayName,
                 role: ROLES.PARENT,
                 relatedName: `${student.name} / ${student.studentNo} / ${student.className}`,
                 studentNo: student.studentNo,
@@ -251,45 +406,164 @@ const createParentAccountForStudent = (input: {
     return { userId: parentUserId, username, issuanceBatchId };
 };
 
-authRouter.post("/login", (req, res) => {
+authRouter.get("/risk-challenge", (req: AuthedRequest, res) => {
+    const usernameInput = typeof req.query.username === "string" ? req.query.username : "";
+    let username = "";
+    try {
+        username = usernameInput ? sanitizeUsername(usernameInput) : "";
+    } catch {
+        res.status(400).json({ success: false, message: "用户名格式不合法" });
+        return;
+    }
+
+    const ipAddress = extractIp(req);
+    const userAgent = String(req.headers["user-agent"] ?? "unknown");
+    const risk = getAuthRiskState(username, ipAddress);
+    if (!risk.challengeRequired) {
+        res.json({
+            success: true,
+            message: "当前无需额外校验",
+            data: {
+                required: false,
+                ipAttempts: risk.ipAttempts,
+                userIpAttempts: risk.userIpAttempts
+            }
+        });
+        return;
+    }
+
+    const challenge = createRiskChallenge(username, ipAddress, userAgent);
+    logAudit({
+        userId: 1,
+        actionModule: "auth",
+        actionType: "risk_challenge_issue",
+        objectType: "challenge",
+        detail: { username, ipAddress },
+        ipAddress
+    });
+
+    res.json({
+        success: true,
+        message: "请完成风险校验后继续登录",
+        data: {
+            required: true,
+            challengeToken: challenge.token,
+            challengeQuestion: challenge.question,
+            expiresAt: challenge.expiresAt,
+            ipAttempts: risk.ipAttempts,
+            userIpAttempts: risk.userIpAttempts
+        }
+    });
+});
+
+authRouter.post("/login", (req: AuthedRequest, res) => {
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, message: "参数不合法" });
         return;
     }
 
-    const user = db
-        .prepare(
-            `SELECT id, username, display_name as displayName, password_hash as passwordHash, role, linked_student_id as linkedStudentId
-                    , must_change_password as mustChangePassword, is_active as isActive
-       FROM users WHERE username = ?`
-        )
-        .get(parsed.data.username) as
-        | {
-            id: number;
-            username: string;
-            displayName: string;
-            passwordHash: string;
-            role: AuthUser["role"];
-            linkedStudentId: number | null;
-            mustChangePassword: number;
-            isActive: number;
-        }
-        | undefined;
+    if (parsed.data.honeypot) {
+        res.status(400).json({ success: false, message: "请求不合法" });
+        return;
+    }
 
+    if (parsed.data.submittedAt && Date.now() - parsed.data.submittedAt < securityConfig.authMinSubmitDelayMs) {
+        res.status(400).json({ success: false, message: "提交过快，请稍后重试" });
+        return;
+    }
+
+    const ipAddress = extractIp(req);
+    const userAgent = String(req.headers["user-agent"] ?? "unknown");
+    let username = "";
+    try {
+        username = sanitizeUsername(parsed.data.username);
+        assertAuthAttemptAllowed(username, ipAddress);
+    } catch (error) {
+        res.status(429).json({ success: false, message: error instanceof Error ? error.message : "登录请求过于频繁" });
+        return;
+    }
+
+    const risk = getAuthRiskState(username, ipAddress);
+    if (risk.challengeRequired) {
+        try {
+            consumeRiskChallenge({
+                username,
+                ipAddress,
+                userAgent,
+                token: parsed.data.riskChallengeToken,
+                answer: parsed.data.riskChallengeAnswer
+            });
+        } catch (error) {
+            res.status(403).json({ success: false, message: error instanceof Error ? error.message : "请先完成风险校验" });
+            return;
+        }
+    }
+
+    const user = getUserByUsername(username);
     if (user && !user.isActive) {
         res.status(403).json({ success: false, message: "账号已停用，请联系管理员" });
         return;
     }
 
+    if (user?.lockedUntil && dayjs(user.lockedUntil).isAfter(dayjs())) {
+        res.status(429).json({ success: false, message: "账号已被临时锁定，请稍后再试" });
+        return;
+    }
+
     if (!user || !comparePassword(parsed.data.password, user.passwordHash)) {
+        const failure = recordAuthFailure(username, ipAddress);
+        const now = dayjs().toISOString();
+        if (user) {
+            const nextFailedCount = user.failedLoginCount + 1;
+            const shouldLock = nextFailedCount >= securityConfig.authLockMaxFailures;
+            db.prepare(
+                `UPDATE users
+                 SET failed_login_count = ?,
+                     last_failed_login_at = ?,
+                     locked_until = CASE WHEN ? THEN ? ELSE locked_until END
+                 WHERE id = ?`
+            ).run(
+                nextFailedCount,
+                now,
+                shouldLock ? 1 : 0,
+                shouldLock ? dayjs().add(securityConfig.authLockMinutes, "minute").toISOString() : null,
+                user.id
+            );
+        }
+
+        logAudit({
+            userId: user?.id ?? 1,
+            actionModule: "auth",
+            actionType: "login_failed",
+            objectType: "user",
+            objectId: user?.id ?? null,
+            detail: {
+                username,
+                ipAttempts: failure.ipAttempts,
+                userIpAttempts: failure.userIpAttempts,
+                locked: Boolean(user && user.failedLoginCount + 1 >= securityConfig.authLockMaxFailures)
+            },
+            ipAddress
+        });
+
         res.status(401).json({ success: false, message: "账号或密码错误" });
         return;
     }
 
     const payload = toAuthPayload(user);
-
-    const token = signToken(payload);
+    clearAuthFailures(username, ipAddress);
+    db.prepare(
+        `UPDATE users
+         SET failed_login_count = 0,
+             last_failed_login_at = NULL,
+             locked_until = NULL,
+             last_login_at = ?,
+             last_login_ip = ?,
+             last_login_user_agent = ?
+         WHERE id = ?`
+    ).run(dayjs().toISOString(), ipAddress, userAgent, user.id);
+    const session = issueTokensAndCookie(payload, res, { ipAddress, userAgent });
 
     logAudit({
         userId: payload.id,
@@ -297,11 +571,114 @@ authRouter.post("/login", (req, res) => {
         actionType: "login",
         objectType: "user",
         objectId: payload.id,
-        detail: { username: payload.username, role: payload.role },
-        ipAddress: extractIp(req)
+        detail: { username: payload.username, role: payload.role, sessionId: session.sessionId },
+        ipAddress
     });
 
-    res.json({ success: true, message: "登录成功", data: { token, user: payload } });
+    res.json({ success: true, message: "登录成功", data: { token: session.accessToken, user: payload } });
+});
+
+authRouter.post("/refresh", (req: AuthedRequest, res) => {
+    try {
+        const refreshToken = getRefreshTokenFromCookie(req.headers.cookie);
+        if (!refreshToken) {
+            clearRefreshTokenCookie(res);
+            res.status(401).json({ success: false, message: "刷新会话不存在，请重新登录" });
+            return;
+        }
+
+        const parsedRefreshToken = verifyRefreshToken(refreshToken);
+        if (!parsedRefreshToken) {
+            clearRefreshTokenCookie(res);
+            res.status(401).json({ success: false, message: "登录会话已失效，请重新登录" });
+            return;
+        }
+
+        const sessionRow = db.prepare(
+            `SELECT user_id as userId
+             FROM auth_sessions
+             WHERE id = ?`
+        ).get(parsedRefreshToken.sessionId) as { userId: number } | undefined;
+        const user = sessionRow ? getUserById(sessionRow.userId) : undefined;
+        if (!user || !user.isActive) {
+            clearRefreshTokenCookie(res);
+            res.status(401).json({ success: false, message: "登录会话已失效，请重新登录" });
+            return;
+        }
+
+        const nextSession = rotateRefreshSession(parsedRefreshToken.token, toAuthPayload(user), {
+            ipAddress: extractIp(req),
+            userAgent: String(req.headers["user-agent"] ?? "unknown")
+        });
+
+        if (!nextSession) {
+            clearRefreshTokenCookie(res);
+            res.status(401).json({ success: false, message: "登录会话已失效，请重新登录" });
+            return;
+        }
+
+        setRefreshTokenCookie(res, nextSession.refreshToken);
+        logAudit({
+            userId: user.id,
+            actionModule: "auth",
+            actionType: "refresh",
+            objectType: "session",
+            objectId: nextSession.sessionId,
+            ipAddress: extractIp(req)
+        });
+        res.json({ success: true, message: "刷新成功", data: { token: nextSession.accessToken, user: toAuthPayload(user) } });
+    } catch {
+        clearRefreshTokenCookie(res);
+        res.status(500).json({ success: false, message: "会话刷新失败，请重新登录" });
+    }
+});
+
+authRouter.post("/logout", requireAuth, (req: AuthedRequest, res) => {
+    if (req.sessionId) {
+        revokeSessionById(req.sessionId, "user_logout");
+    }
+    clearRefreshTokenCookie(res);
+    if (req.user) {
+        logAudit({
+            userId: req.user.id,
+            actionModule: "auth",
+            actionType: "logout",
+            objectType: "session",
+            objectId: req.sessionId ?? null,
+            ipAddress: extractIp(req)
+        });
+    }
+    res.json({ success: true, message: "已退出登录" });
+});
+
+authRouter.post("/logout-all", requireAuth, (req: AuthedRequest, res) => {
+    if (!req.user) {
+        res.status(401).json({ success: false, message: "未登录" });
+        return;
+    }
+    const count = revokeAllSessionsForUser(req.user.id, "user_logout_all");
+    clearRefreshTokenCookie(res);
+    logAudit({
+        userId: req.user.id,
+        actionModule: "auth",
+        actionType: "logout_all",
+        objectType: "session",
+        detail: { revokedCount: count },
+        ipAddress: extractIp(req)
+    });
+    res.json({ success: true, message: "已退出全部设备", data: { revokedCount: count } });
+});
+
+authRouter.get("/session-status", requireAuth, (req: AuthedRequest, res) => {
+    res.json({
+        success: true,
+        message: "会话有效",
+        data: {
+            user: req.user,
+            sessionId: req.sessionId,
+            sessionExpiresAt: req.sessionExpiresAt
+        }
+    });
 });
 
 authRouter.post("/register", (req, res) => {
@@ -387,7 +764,11 @@ authRouter.get("/me", requireAuth, (req: AuthedRequest, res) => {
                 passwordResetAt: user.passwordResetAt,
                 createdAt: user.createdAt
             },
-            roleProfile
+            roleProfile,
+            session: {
+                sessionId: req.sessionId ?? null,
+                sessionExpiresAt: req.sessionExpiresAt ?? null
+            }
         }
     });
 });
@@ -410,8 +791,10 @@ authRouter.patch("/me/profile", requireAuth, (req: AuthedRequest, res) => {
         return;
     }
 
-    const displayName = parsed.data.displayName?.trim() || current.displayName;
-    const phone = parsed.data.phone !== undefined ? (parsed.data.phone.trim() || null) : current.phone;
+    const displayName = parsed.data.displayName !== undefined
+        ? assertSafeBusinessText(parsed.data.displayName, { fieldName: "显示名称", required: true, maxLength: 40 })
+        : current.displayName;
+    const phone = parsed.data.phone !== undefined ? sanitizePhone(parsed.data.phone) : current.phone;
     const email = parsed.data.email !== undefined ? (parsed.data.email.trim() || null) : current.email;
 
     db.prepare(
@@ -427,7 +810,7 @@ authRouter.patch("/me/profile", requireAuth, (req: AuthedRequest, res) => {
     }
 
     const payload = toAuthPayload(updated);
-    const token = signToken(payload);
+    const token = req.sessionId ? signAccessToken({ sessionId: req.sessionId, user: payload }) : null;
 
     logAudit({
         userId: req.user.id,
@@ -470,6 +853,13 @@ authRouter.patch("/me/password", requireAuth, (req: AuthedRequest, res) => {
         return;
     }
 
+    try {
+        validateStrongPassword(parsed.data.newPassword);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "新密码强度不足" });
+        return;
+    }
+
     const user = getUserById(req.user.id);
     if (!user) {
         res.status(404).json({ success: false, message: "用户不存在" });
@@ -487,6 +877,7 @@ authRouter.patch("/me/password", requireAuth, (req: AuthedRequest, res) => {
          WHERE id = ?`
     ).run(hashPassword(parsed.data.newPassword), dayjs().toISOString(), req.user.id);
     invalidateUserIssuancePasswords(db, req.user.id);
+    revokeAllSessionsForUser(req.user.id, "password_changed");
 
     const updated = getUserById(req.user.id);
     if (!updated) {
@@ -494,7 +885,10 @@ authRouter.patch("/me/password", requireAuth, (req: AuthedRequest, res) => {
         return;
     }
 
-    const token = signToken(toAuthPayload(updated));
+    const nextSession = issueTokensAndCookie(toAuthPayload(updated), res, {
+        ipAddress: extractIp(req),
+        userAgent: String(req.headers["user-agent"] ?? "unknown")
+    });
 
     logAudit({
         userId: req.user.id,
@@ -505,7 +899,7 @@ authRouter.patch("/me/password", requireAuth, (req: AuthedRequest, res) => {
         ipAddress: extractIp(req)
     });
 
-    res.json({ success: true, message: "密码修改成功", data: { token, user: toAuthPayload(updated) } });
+    res.json({ success: true, message: "密码修改成功", data: { token: nextSession.accessToken, user: toAuthPayload(updated) } });
 });
 
 authRouter.get("/accounts", requireAuth, requireRole(ROLES.ADMIN, ROLES.TEACHER, ROLES.HEAD_TEACHER), (_req, res) => {
@@ -604,6 +998,7 @@ authRouter.post("/accounts/:id/reset-password", requireAuth, requireRole(ROLES.A
          SET password_hash = ?, must_change_password = 1, password_reset_at = ?, is_active = 1
          WHERE id = ?`
     ).run(hashPassword(temporaryPassword), dayjs().toISOString(), target.id);
+    revokeAllSessionsForUser(target.id, "admin_reset_password");
     const batchId = createIssuanceBatch(db, {
         batchType: "manual_reset",
         sourceModule: "auth",
@@ -874,6 +1269,10 @@ authRouter.post("/account-issuance-items/download", requireAuth, requireRole(ROL
 });
 
 authRouter.get("/demo-accounts", requireAuth, requireRole(ROLES.ADMIN), (_req, res) => {
+    if (isProduction) {
+        res.status(404).json({ success: false, message: "生产环境不提供演示账号接口" });
+        return;
+    }
     res.json({
         success: true,
         message: "演示账号",
