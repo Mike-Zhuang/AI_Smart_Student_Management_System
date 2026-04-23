@@ -501,3 +501,10 @@
   - 移除 `apps/frontend/index.html` 中通过 `meta` 注入的 CSP、X-Frame-Options、COOP 等安全头，避免开发环境下 Vite 内联样式与资源加载被误拦截；生产安全头继续由后端与 Nginx 通过响应头下发。
   - `apps/backend/src/server.ts` 为端口监听增加显式错误处理，`EADDRINUSE` 时输出中文可读提示，帮助快速定位本地已有旧进程占用 `4000` 端口的问题。
   - `apps/backend/src/routes/auth.ts` 的 `/api/auth/refresh` 增加 refresh token 预校验与异常兜底，避免浏览器残留旧 cookie 或畸形 token 直接打成 500。
+
+## 2026-04-23 21:02:23 +0800
+
+- 修复线上生产环境配置缺失导致的登录 P0 故障，并补齐防再发保护：
+  - 远程服务器 `/opt/management-system/apps/backend/.env` 补齐 `ACCESS_TOKEN_SECRET`、`REFRESH_TOKEN_SECRET`、`ACCOUNT_ARCHIVE_SECRET`、`ALLOWED_ORIGINS`、`COOKIE_SECURE` 等关键生产配置，重启 `management-system-backend.service` 后，公网 `admin/admin123` 登录与 `/api/auth/refresh` 实测恢复成功。
+  - `apps/backend/src/config/security.ts` 新增生产环境安全配置校验：缺少关键密钥或 `ALLOWED_ORIGINS` 时直接拒绝启动，并对 `COOKIE_SECURE=false` 输出警告，避免服务“看似启动成功、实际登录全废”。
+  - `apps/backend/src/server.ts` 启动前接入安全配置校验；`apps/backend/.env.example` 与 `README.md` 同步补充 `http://IP:端口` 场景下 `ALLOWED_ORIGINS` 与 `COOKIE_SECURE` 的正确写法。

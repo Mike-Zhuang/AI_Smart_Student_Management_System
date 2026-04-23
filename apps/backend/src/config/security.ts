@@ -39,11 +39,14 @@ const splitCsv = (value: string | undefined): string[] => {
 };
 
 export const isProduction = process.env.NODE_ENV === "production";
+const DEFAULT_ACCESS_TOKEN_SECRET = "dev-access-token-secret-change-me";
+const DEFAULT_REFRESH_TOKEN_SECRET = "dev-refresh-token-secret-change-me";
+const DEFAULT_ARCHIVE_SECRET = "dev-account-archive-secret";
 
 export const securityConfig = {
     trustProxy: process.env.TRUST_PROXY?.trim() || "loopback",
-    accessTokenSecret: process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET || "dev-access-token-secret-change-me",
-    refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET || process.env.JWT_SECRET || "dev-refresh-token-secret-change-me",
+    accessTokenSecret: process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET || DEFAULT_ACCESS_TOKEN_SECRET,
+    refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET || process.env.JWT_SECRET || DEFAULT_REFRESH_TOKEN_SECRET,
     accessTokenTtlMinutes: toNumber(process.env.ACCESS_TOKEN_TTL_MINUTES, 15, { min: 5, max: 120 }),
     refreshTokenTtlDays: toNumber(process.env.REFRESH_TOKEN_TTL_DAYS, 7, { min: 1, max: 30 }),
     cookieDomain: process.env.COOKIE_DOMAIN?.trim() || undefined,
@@ -71,3 +74,47 @@ export const securityConfig = {
 };
 
 export const ACCESS_TOKEN_COOKIELESS_BUFFER_SECONDS = 15;
+
+export const validateRuntimeSecurityConfig = (): void => {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!isProduction) {
+        return;
+    }
+
+    if (!process.env.ACCESS_TOKEN_SECRET?.trim() || securityConfig.accessTokenSecret === DEFAULT_ACCESS_TOKEN_SECRET) {
+        errors.push("缺少 ACCESS_TOKEN_SECRET，生产环境禁止使用默认 access token 密钥");
+    }
+
+    if (!process.env.REFRESH_TOKEN_SECRET?.trim() || securityConfig.refreshTokenSecret === DEFAULT_REFRESH_TOKEN_SECRET) {
+        errors.push("缺少 REFRESH_TOKEN_SECRET，生产环境禁止使用默认 refresh token 密钥");
+    }
+
+    if (!process.env.ACCOUNT_ARCHIVE_SECRET?.trim() || process.env.ACCOUNT_ARCHIVE_SECRET === DEFAULT_ARCHIVE_SECRET) {
+        errors.push("缺少 ACCOUNT_ARCHIVE_SECRET，生产环境禁止使用默认归档密钥");
+    }
+
+    if (securityConfig.allowedOrigins.length === 0) {
+        errors.push("缺少 ALLOWED_ORIGINS，生产环境必须显式配置允许访问的前端来源");
+    }
+
+    if (!securityConfig.cookieSecure) {
+        warnings.push("COOKIE_SECURE=false，当前部署将通过非 HTTPS 传输 refresh cookie，请尽快切换到 HTTPS");
+    }
+
+    if (warnings.length > 0) {
+        for (const warning of warnings) {
+            // eslint-disable-next-line no-console
+            console.warn(`[security-warning] ${warning}`);
+        }
+    }
+
+    if (errors.length > 0) {
+        for (const error of errors) {
+            // eslint-disable-next-line no-console
+            console.error(`[security-error] ${error}`);
+        }
+        throw new Error("生产环境安全配置不完整，服务已拒绝启动");
+    }
+};

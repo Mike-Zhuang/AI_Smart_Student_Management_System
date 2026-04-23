@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { isProduction, securityConfig } from "./config/security.js";
+import { isProduction, securityConfig, validateRuntimeSecurityConfig } from "./config/security.js";
 import { initDatabase, runDeferredDatabaseMaintenance } from "./db.js";
 import { aiRateLimit, authRouteRateLimit, globalRequestRateLimit, uploadRateLimit } from "./middleware/rateLimit.js";
 import { adminRouter } from "./routes/admin.js";
@@ -19,6 +19,7 @@ import { orgStructureRouter } from "./routes/orgStructure.js";
 import { studentsRouter } from "./routes/students.js";
 
 dotenv.config();
+validateRuntimeSecurityConfig();
 initDatabase();
 
 const app = express();

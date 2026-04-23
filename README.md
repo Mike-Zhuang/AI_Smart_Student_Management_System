@@ -211,6 +211,7 @@ pnpm run build:pnpm
 2. 确认请求是发往 /api 而不是 http://localhost:4000
 3. 若页面仍显示已登录但接口提示“令牌无效或已过期”，直接刷新页面，系统会优先尝试用 HttpOnly 刷新会话自动恢复；若刷新失败再重新登录
 4. 如部署在生产环境，请确认后端 `.env` 已正确配置 `ALLOWED_ORIGINS`、`COOKIE_SECURE` 与反代 HTTPS
+5. 若部署入口仍是 `http://IP:端口`，`ALLOWED_ORIGINS` 必须精确写到该来源，且 `COOKIE_SECURE` 必须为 `false`；否则登录会被 CORS 拒绝，或 refresh cookie 无法下发
 
 ### 8.2 控制台出现 runtime.connect 错误
 
