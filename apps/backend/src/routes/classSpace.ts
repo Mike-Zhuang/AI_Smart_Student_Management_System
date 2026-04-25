@@ -1,4 +1,6 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
+import fs from "node:fs";
+import path from "node:path";
 import { ROLES } from "../constants.js";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -71,6 +73,45 @@ const canAccessClass = (req: AuthedRequest, className: string): boolean => {
     return getAccessibleClasses(req).some((item) => normalizeClassName(item.className) === normalized);
 };
 
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+
+const getFileKind = (filePath: unknown): "image" | "file" | null => {
+    if (typeof filePath !== "string" || !filePath) {
+        return null;
+    }
+    const extension = path.extname(filePath).toLowerCase();
+    return IMAGE_EXTENSIONS.has(extension) ? "image" : "file";
+};
+
+const sendProtectedMedia = (
+    req: AuthedRequest,
+    res: Response,
+    row: { className: string; filePath: string | null; fileName: string | null } | undefined
+): void => {
+    if (!row) {
+        res.status(404).json({ success: false, message: "文件不存在" });
+        return;
+    }
+
+    if (!canAccessClass(req, row.className)) {
+        res.status(403).json({ success: false, message: "无权查看该班级文件" });
+        return;
+    }
+
+    if (!row.filePath || !fs.existsSync(row.filePath)) {
+        res.status(404).json({ success: false, message: "文件不存在或已被清理" });
+        return;
+    }
+
+    if (getFileKind(row.filePath) === "image") {
+        res.type(path.extname(row.filePath).toLowerCase() === ".webp" ? "image/webp" : path.extname(row.filePath));
+    } else if (row.fileName) {
+        res.attachment(row.fileName);
+    }
+
+    res.sendFile(row.filePath);
+};
+
 classSpaceRouter.use(requireAuth);
 
 classSpaceRouter.get("/overview", (req: AuthedRequest, res) => {
@@ -116,18 +157,36 @@ classSpaceRouter.get("/detail", (req: AuthedRequest, res) => {
     ).all(className) as Array<Record<string, unknown>>).map((item) => repairRecordStrings(item));
 
     const wellbeingPosts = (db.prepare(
-        `SELECT id, title, content, attachment_name as attachmentName, created_at as createdAt
+        `SELECT id, title, content, attachment_name as attachmentName, attachment_path as attachmentPath, created_at as createdAt
          FROM wellbeing_posts
          WHERE class_name = ?
          ORDER BY id DESC`
-    ).all(className) as Array<Record<string, unknown>>).map((item) => repairRecordStrings(item));
+    ).all(className) as Array<Record<string, unknown>>).map((item) => {
+        const repaired = repairRecordStrings(item);
+        const mediaKind = getFileKind(repaired.attachmentPath);
+        return {
+            ...repaired,
+            attachmentPath: undefined,
+            attachmentKind: mediaKind,
+            attachmentUrl: mediaKind ? `/api/class-space/media/wellbeing/${repaired.id}` : null
+        };
+    });
 
     const gallery = (db.prepare(
-        `SELECT id, title, description, activity_date as activityDate, file_name as fileName, created_at as createdAt
+        `SELECT id, title, description, activity_date as activityDate, file_name as fileName, file_path as filePath, created_at as createdAt
          FROM class_gallery
          WHERE class_name = ?
          ORDER BY id DESC`
-    ).all(className) as Array<Record<string, unknown>>).map((item) => repairRecordStrings(item));
+    ).all(className) as Array<Record<string, unknown>>).map((item) => {
+        const repaired = repairRecordStrings(item);
+        const mediaKind = getFileKind(repaired.filePath);
+        return {
+            ...repaired,
+            filePath: undefined,
+            fileKind: mediaKind,
+            fileUrl: mediaKind ? `/api/class-space/media/gallery/${repaired.id}` : null
+        };
+    });
 
     res.json({
         success: true,
@@ -140,4 +199,30 @@ classSpaceRouter.get("/detail", (req: AuthedRequest, res) => {
             gallery
         }
     });
+});
+
+classSpaceRouter.get("/media/wellbeing/:id", (req: AuthedRequest, res) => {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id)) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const row = db
+        .prepare(`SELECT class_name as className, attachment_path as filePath, attachment_name as fileName FROM wellbeing_posts WHERE id = ?`)
+        .get(id) as { className: string; filePath: string | null; fileName: string | null } | undefined;
+    sendProtectedMedia(req, res, row);
+});
+
+classSpaceRouter.get("/media/gallery/:id", (req: AuthedRequest, res) => {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id)) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const row = db
+        .prepare(`SELECT class_name as className, file_path as filePath, file_name as fileName FROM class_gallery WHERE id = ?`)
+        .get(id) as { className: string; filePath: string | null; fileName: string | null } | undefined;
+    sendProtectedMedia(req, res, row);
 });

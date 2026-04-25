@@ -4,7 +4,7 @@ const MOJIBAKE_PATTERNS = [
     /�/,
     /锟/,
     /瀛|鏂|鎷|閿|鍐|璇|鏉|甯|骞|妯/,
-    /鐢|鏈|瑕|濂|涔|犲|夭|鍚|鍙/,
+    /鐢|鏈|瑕|濂|涔|犲|夭|鍚|鍙|鐜|嬭/,
     /Ã|Â|ð|Ð|¢/,
     /ç”|æœ|å¥|å­|ä¹|å¤|å|ä¸/,
     /ó|Ô|Ã|Ñ|ï|ì|é|ò/,
@@ -128,6 +128,31 @@ const tryReDecode = (value: string): string[] => {
     ];
 };
 
+const isUtf8ReadAsGbkMojibake = (value: string): boolean => {
+    return /鐜|嬭|鐢|鏈|瑕|濂|涔|犲|鍚|鍙|瀛|鏂|鎷|閿|鍐|璇|鏉|甯|骞/.test(value);
+};
+
+const hasReplacementNoise = (value: string): boolean => /�|锟/.test(value);
+
+const preferRecoveredCandidate = (original: string, candidate: string): boolean => {
+    if (!isUtf8ReadAsGbkMojibake(original)) {
+        return false;
+    }
+
+    if (!candidate || candidate === original || hasReplacementNoise(candidate) || needsRepair(candidate)) {
+        return false;
+    }
+
+    if (candidate.length > original.length) {
+        return false;
+    }
+
+    const originalScore = scoreCandidate(original);
+    const candidateScore = scoreCandidate(candidate);
+    const candidateChineseRatio = getChineseRatio(candidate);
+    return candidateChineseRatio >= 0.5 && candidateScore >= originalScore + 2;
+};
+
 const isLikelyUnreadable = (value: string): boolean => {
     const normalized = normalizeDisplayText(value);
     if (!normalized) {
@@ -178,7 +203,19 @@ export const repairText = (value: unknown): string => {
         return "";
     }
 
-    const candidates = [normalized, ...tryReDecode(normalized).map(normalizeDisplayText)].filter(Boolean);
+    if (!needsRepair(normalized)) {
+        return normalized;
+    }
+
+    const recoveredCandidates = tryReDecode(normalized).map(normalizeDisplayText).filter(Boolean);
+    const preferred = recoveredCandidates
+        .filter((candidate) => preferRecoveredCandidate(normalized, candidate))
+        .sort((left, right) => scoreCandidate(right) - scoreCandidate(left))[0];
+    if (preferred) {
+        return preferred;
+    }
+
+    const candidates = [normalized, ...recoveredCandidates].filter(Boolean);
     return candidates.sort((left, right) => scoreCandidate(right) - scoreCandidate(left))[0] ?? normalized;
 };
 

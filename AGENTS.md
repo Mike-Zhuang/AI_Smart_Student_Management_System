@@ -508,3 +508,23 @@
   - 远程服务器 `/opt/management-system/apps/backend/.env` 补齐 `ACCESS_TOKEN_SECRET`、`REFRESH_TOKEN_SECRET`、`ACCOUNT_ARCHIVE_SECRET`、`ALLOWED_ORIGINS`、`COOKIE_SECURE` 等关键生产配置，重启 `management-system-backend.service` 后，公网 `admin/admin123` 登录与 `/api/auth/refresh` 实测恢复成功。
   - `apps/backend/src/config/security.ts` 新增生产环境安全配置校验：缺少关键密钥或 `ALLOWED_ORIGINS` 时直接拒绝启动，并对 `COOKIE_SECURE=false` 输出警告，避免服务“看似启动成功、实际登录全废”。
   - `apps/backend/src/server.ts` 启动前接入安全配置校验；`apps/backend/.env.example` 与 `README.md` 同步补充 `http://IP:端口` 场景下 `ALLOWED_ORIGINS` 与 `COOKIE_SECURE` 的正确写法。
+
+## 2026-04-25 15:27:10 +0800
+
+- 修复教师班级关系清理 500 问题：
+  - `apps/backend/src/utils/accountMaintenance.ts` 删除教师账号前同步清理 `auth_sessions`、`chat_sessions`，并把 `audit_logs` 与账号发放批次的历史引用转交给“系统审计保留”账号。
+  - `apps/backend/src/routes/dataImport.ts` 教师关系批量删除改为按实际命中数量返回，并对外键异常给出中文可读提示。
+  - 教师关系管理列表返回前统一执行文本修复，避免历史乱码姓名继续上屏。
+- 加强中文乱码修复：
+  - `apps/backend/src/utils/text.ts` 增强 UTF-8 被 GBK/GB18030 误读的短姓名识别，覆盖 `鐜嬭开 -> 王迪`，并收紧正常中文的重解码条件。
+  - `apps/backend/src/db.ts` 文本维护版本升级到 `2026-04-25-encoding-v3`，线上服务重启后会自动后台重跑历史库文本修复。
+  - 新增 `apps/backend/src/utils/text-repair-check.ts` 与 `npm run check:text -w @ms/backend`，覆盖乱码姓名与正常中文不误修的最小校验。
+- 修复班级空间图片上传后无法展示：
+  - 后端新增 `sharp`，心灵驿站与班级风采图片上传后压缩为 WebP 展示图，最长边 1920px，数据库只保留压缩图路径。
+  - `apps/backend/src/routes/classSpace.ts` 新增受权限保护的媒体读取接口，按班级访问权限返回心灵驿站附件和班级风采图片。
+  - 前端新增 `AuthenticatedImage` 鉴权图片组件，`ClassSpacePanel` 与 `HeadTeacherPanel` 改为真实图片预览和班级风采缩略图卡片。
+  - `README.md`、`GUIDE.md` 同步补充教师关系删除、历史乱码自动维护和图片压缩展示策略。
+- 验证结果：
+  - 执行 `npm run check:text -w @ms/backend` 通过。
+  - 执行 `npm run build -w @ms/backend` 通过。
+  - 执行 `npm run build -w @ms/frontend` 通过。

@@ -49,6 +49,13 @@ export const purgeIssuanceArtifactsForUser = (db: SqliteDatabase, userId: number
 
 export const deleteUserWithIssuance = (db: SqliteDatabase, userId: number): void => {
     const auditKeeperUserId = getOrCreateAuditKeeperUserId(db);
+    db.prepare(`DELETE FROM auth_sessions WHERE user_id = ?`).run(userId);
+    db.prepare(`DELETE FROM chat_sessions WHERE user_id = ?`).run(userId);
+    db.prepare(
+        `UPDATE audit_logs
+         SET user_id = ?
+         WHERE user_id = ?`
+    ).run(auditKeeperUserId, userId);
     db.prepare(
         `UPDATE account_issuance_batches
          SET operator_user_id = ?

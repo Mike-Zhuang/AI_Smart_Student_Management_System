@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { AuthenticatedImage } from "./AuthenticatedImage";
 import { apiRequest } from "../lib/api";
 import { parseStructuredCommittee, parseStructuredGrid } from "../lib/classProfile";
 
@@ -23,8 +24,8 @@ type ClassSpaceDetail = {
         classCommittee: string;
     } | null;
     roster: Array<{ id: number; studentNo: string; name: string; grade: string; className: string }>;
-    wellbeingPosts: Array<{ id: number; title: string; content: string; attachmentName?: string | null; createdAt: string }>;
-    gallery: Array<{ id: number; title: string; description: string; activityDate?: string | null; fileName?: string | null; createdAt: string }>;
+    wellbeingPosts: Array<{ id: number; title: string; content: string; attachmentName?: string | null; attachmentKind?: "image" | "file" | null; attachmentUrl?: string | null; createdAt: string }>;
+    gallery: Array<{ id: number; title: string; description: string; activityDate?: string | null; fileName?: string | null; fileKind?: "image" | "file" | null; fileUrl?: string | null; createdAt: string }>;
 };
 
 export const ClassSpacePanel = () => {
@@ -225,6 +226,9 @@ export const ClassSpacePanel = () => {
                         <div className="list-item" key={item.id}>
                             <strong>{item.title}</strong>
                             <p>{item.content}</p>
+                            {item.attachmentKind === "image" && item.attachmentUrl ? (
+                                <AuthenticatedImage className="class-space-media" srcPath={item.attachmentUrl} alt={item.attachmentName || item.title} />
+                            ) : null}
                             <small>{item.attachmentName ? `附件：${item.attachmentName} · ` : ""}{new Date(item.createdAt).toLocaleString()}</small>
                         </div>
                     ))}
@@ -234,9 +238,12 @@ export const ClassSpacePanel = () => {
 
             <article className="panel-card wide">
                 <h4>班级风采</h4>
-                <div className="list-box compact">
+                <div className="media-card-grid">
                     {(detail?.gallery ?? []).map((item) => (
-                        <div className="list-item" key={item.id}>
+                        <div className="media-card" key={item.id}>
+                            {item.fileKind === "image" && item.fileUrl ? (
+                                <AuthenticatedImage className="media-card-image" srcPath={item.fileUrl} alt={item.fileName || item.title} />
+                            ) : null}
                             <strong>{item.title}</strong>
                             <p>{item.description || "暂无说明"}</p>
                             <small>

@@ -1007,9 +1007,9 @@ dataImportRouter.get("/teachers/manage", (req: AuthedRequest, res) => {
              JOIN users u ON u.id = tcl.teacher_user_id
              ORDER BY tcl.class_name ASC, u.username ASC`
         )
-        .all();
+        .all() as Array<Record<string, unknown>>;
 
-    res.json({ success: true, message: "查询成功", data: rows });
+    res.json({ success: true, message: "查询成功", data: rows.map((item) => repairRecordStrings(item)) });
 });
 
 dataImportRouter.post("/teachers/batch-delete", (req: AuthedRequest, res) => {
@@ -1036,16 +1036,25 @@ dataImportRouter.post("/teachers/batch-delete", (req: AuthedRequest, res) => {
         }
     });
 
-    transaction(rows);
+    try {
+        transaction(rows);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (/FOREIGN KEY constraint failed/i.test(message)) {
+            res.status(409).json({ success: false, message: "删除失败：该教师账号仍有关联历史记录，系统已阻止产生不一致数据。请刷新后重试，或联系管理员处理。" });
+            return;
+        }
+        throw error;
+    }
 
     logAudit({
         userId: req.user.id,
         actionModule: "data-import",
         actionType: "delete_teacher_links",
         objectType: "teacher_class_links",
-        detail: { ids: parsed.data.ids, count: parsed.data.ids.length },
+        detail: { ids: parsed.data.ids, count: rows.length },
         ipAddress: extractIp(req)
     });
 
-    res.json({ success: true, message: `已删除 ${parsed.data.ids.length} 条教师班级关系` });
+    res.json({ success: true, message: `已删除 ${rows.length} 条教师班级关系`, data: { count: rows.length } });
 });

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dayjs from "dayjs";
 import multer from "multer";
+import sharp from "sharp";
 import { Router, type Response } from "express";
 import { z } from "zod";
 import { ROLES } from "../constants.js";
@@ -27,6 +28,15 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: createMulterFileSizeLimit() }
 });
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+
+const getFileKind = (filePath: unknown): "image" | "file" | null => {
+    if (typeof filePath !== "string" || !filePath) {
+        return null;
+    }
+    return IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase()) ? "image" : "file";
+};
 
 const classProfileSchema = z.object({
     className: z.string().min(2),
@@ -108,19 +118,37 @@ const assertClassAccess = (req: AuthedRequest, className: string, res: Response)
     return true;
 };
 
-const saveUpload = (
+const saveUpload = async (
     file: Express.Multer.File | undefined,
     prefix: string,
     category: "wellbeing-attachment" | "gallery-image"
-): { fileName: string | null; filePath: string | null } => {
+): Promise<{ fileName: string | null; filePath: string | null }> => {
     if (!file) {
         return { fileName: null, filePath: null };
     }
 
     const safeUpload = assertSafeUploadFile(file, category);
     const extension = safeUpload.extension || ".dat";
-    const safeName = `${prefix}-${Date.now()}${extension}`;
+    const safePrefix = prefix.replace(/[\\/:*?"<>|\s]+/g, "-");
+    const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+    const shouldCompressImage = imageExtensions.has(extension);
+    const finalExtension = shouldCompressImage ? ".webp" : extension;
+    const safeName = `${safePrefix}-${Date.now()}${finalExtension}`;
     const absolutePath = path.join(uploadDir, safeName);
+
+    if (shouldCompressImage) {
+        await sharp(file.buffer)
+            .rotate()
+            .resize({ width: 1920, height: 1920, fit: "inside", withoutEnlargement: true })
+            .webp({ quality: 86, effort: 4 })
+            .toFile(absolutePath);
+
+        return {
+            fileName: repairText(safeUpload.sanitizedName),
+            filePath: absolutePath
+        };
+    }
+
     fs.writeFileSync(absolutePath, file.buffer);
     return {
         fileName: repairText(safeUpload.sanitizedName),
@@ -397,17 +425,29 @@ headTeacherRouter.get("/wellbeing-posts", (req: AuthedRequest, res) => {
 
     const rows = db
         .prepare(
-            `SELECT id, class_name as className, title, content, attachment_name as attachmentName, created_at as createdAt
+            `SELECT id, class_name as className, title, content, attachment_name as attachmentName, attachment_path as attachmentPath, created_at as createdAt
              FROM wellbeing_posts
              WHERE class_name = ?
              ORDER BY id DESC`
         )
-        .all(className);
+        .all(className) as Array<Record<string, unknown>>;
 
-    res.json({ success: true, message: "查询成功", data: rows });
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: rows.map((item) => {
+            const mediaKind = getFileKind(item.attachmentPath);
+            return {
+                ...item,
+                attachmentPath: undefined,
+                attachmentKind: mediaKind,
+                attachmentUrl: mediaKind ? `/api/class-space/media/wellbeing/${item.id}` : null
+            };
+        })
+    });
 });
 
-headTeacherRouter.post("/wellbeing-posts", uploadRateLimit, upload.single("file"), (req: AuthedRequest, res) => {
+headTeacherRouter.post("/wellbeing-posts", uploadRateLimit, upload.single("file"), async (req: AuthedRequest, res) => {
     if (!req.user) {
         res.status(401).json({ success: false, message: "未登录" });
         return;
@@ -426,7 +466,7 @@ headTeacherRouter.post("/wellbeing-posts", uploadRateLimit, upload.single("file"
 
     let uploadResult;
     try {
-        uploadResult = saveUpload(req.file, `wellbeing-${className}`, "wellbeing-attachment");
+        uploadResult = await saveUpload(req.file, `wellbeing-${className}`, "wellbeing-attachment");
     } catch (error) {
         res.status(400).json({ success: false, message: error instanceof Error ? error.message : "附件校验失败" });
         return;
@@ -564,17 +604,29 @@ headTeacherRouter.get("/gallery", (req: AuthedRequest, res) => {
     const rows = db
         .prepare(
             `SELECT id, class_name as className, title, description, activity_date as activityDate,
-                    file_name as fileName, created_at as createdAt
+                    file_name as fileName, file_path as filePath, created_at as createdAt
              FROM class_gallery
              WHERE class_name = ?
              ORDER BY id DESC`
         )
-        .all(className);
+        .all(className) as Array<Record<string, unknown>>;
 
-    res.json({ success: true, message: "查询成功", data: rows });
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: rows.map((item) => {
+            const mediaKind = getFileKind(item.filePath);
+            return {
+                ...item,
+                filePath: undefined,
+                fileKind: mediaKind,
+                fileUrl: mediaKind ? `/api/class-space/media/gallery/${item.id}` : null
+            };
+        })
+    });
 });
 
-headTeacherRouter.post("/gallery", uploadRateLimit, upload.single("file"), (req: AuthedRequest, res) => {
+headTeacherRouter.post("/gallery", uploadRateLimit, upload.single("file"), async (req: AuthedRequest, res) => {
     if (!req.user) {
         res.status(401).json({ success: false, message: "未登录" });
         return;
@@ -593,7 +645,7 @@ headTeacherRouter.post("/gallery", uploadRateLimit, upload.single("file"), (req:
 
     let uploadResult;
     try {
-        uploadResult = saveUpload(req.file, `gallery-${className}`, "gallery-image");
+        uploadResult = await saveUpload(req.file, `gallery-${className}`, "gallery-image");
     } catch (error) {
         res.status(400).json({ success: false, message: error instanceof Error ? error.message : "图片校验失败" });
         return;

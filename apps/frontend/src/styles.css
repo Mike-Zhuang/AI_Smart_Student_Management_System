@@ -487,6 +487,54 @@ textarea:focus {
     margin: 6px 0;
 }
 
+.class-space-media {
+    width: min(100%, 720px);
+    max-height: 420px;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-cream);
+    background: #f8f6ef;
+    display: block;
+    margin: 10px 0;
+}
+
+.media-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.media-card {
+    border: 1px solid var(--border-warm);
+    border-radius: var(--radius-sm);
+    background: white;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+    align-content: start;
+}
+
+.media-card-image,
+.media-placeholder {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-cream);
+    background: #f8f6ef;
+}
+
+.media-card-image {
+    object-fit: cover;
+    display: block;
+}
+
+.media-placeholder {
+    display: grid;
+    place-items: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
 .ai-draft {
     margin-top: 8px;
     padding: 8px 10px;

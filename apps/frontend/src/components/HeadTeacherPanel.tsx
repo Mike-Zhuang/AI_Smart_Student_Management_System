@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { createGrid, parseStructuredCommittee, parseStructuredGrid, randomizeSeatGrid, serializeStructuredCommittee, serializeStructuredGrid, updateGridCell, type StructuredCommitteeMember, type StructuredCommitteeValue, type StructuredGridValue } from "../lib/classProfile";
 import { riskLevelLabelMap } from "../lib/labels";
+import { AuthenticatedImage } from "./AuthenticatedImage";
 import { ConfirmActionButton } from "./ConfirmActionButton";
 
 type WorkbenchData = {
@@ -53,9 +54,9 @@ type ClassLog = {
     createdAt: string;
 };
 
-type WellbeingPost = { id: number; className: string; title: string; content: string; attachmentName?: string | null; createdAt: string };
+type WellbeingPost = { id: number; className: string; title: string; content: string; attachmentName?: string | null; attachmentKind?: "image" | "file" | null; attachmentUrl?: string | null; createdAt: string };
 type GroupScoreResponse = { records: Array<{ id: number; groupName: string; activityName: string; scoreDelta: number; note: string; createdAt: string }>; scoreBoard: Array<{ groupName: string; totalScore: number }> };
-type GalleryItem = { id: number; className: string; title: string; description: string; activityDate?: string | null; fileName?: string | null; createdAt: string };
+type GalleryItem = { id: number; className: string; title: string; description: string; activityDate?: string | null; fileName?: string | null; fileKind?: "image" | "file" | null; fileUrl?: string | null; createdAt: string };
 
 export const HeadTeacherPanel = () => {
     const [className, setClassName] = useState("");
@@ -347,7 +348,7 @@ export const HeadTeacherPanel = () => {
                     </label>
                     <label>
                         附件（可选）
-                        <input type="file" onChange={(event) => setWellbeingFile(event.target.files?.[0] ?? null)} />
+                        <input type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" onChange={(event) => setWellbeingFile(event.target.files?.[0] ?? null)} />
                     </label>
                     <button className="primary-btn" type="submit">发布内容</button>
                 </form>
@@ -356,6 +357,9 @@ export const HeadTeacherPanel = () => {
                         <div className="list-item" key={item.id}>
                             <strong>{item.title}</strong>
                             <p>{item.content}</p>
+                            {item.attachmentKind === "image" && item.attachmentUrl ? (
+                                <AuthenticatedImage className="class-space-media" srcPath={item.attachmentUrl} alt={item.attachmentName || item.title} />
+                            ) : null}
                             <div className="list-item-actions">
                                 {item.attachmentName ? <small>附件：{item.attachmentName}</small> : null}
                                 <small>{new Date(item.createdAt).toLocaleString()}</small>
@@ -477,14 +481,17 @@ export const HeadTeacherPanel = () => {
                         <textarea rows={3} value={galleryForm.description} onChange={(event) => setGalleryForm((prev) => ({ ...prev, description: event.target.value }))} />
                     </label>
                     <label>
-                        照片或附件（可选）
-                        <input type="file" accept="image/*,.pdf,.doc,.docx" onChange={(event) => setGalleryFile(event.target.files?.[0] ?? null)} />
+                        照片（可选）
+                        <input type="file" accept="image/*" onChange={(event) => setGalleryFile(event.target.files?.[0] ?? null)} />
                     </label>
                     <button className="primary-btn" type="submit">新增风采</button>
                 </form>
-                <div className="list-box compact">
+                <div className="media-card-grid">
                     {gallery.map((item) => (
-                        <div className="list-item" key={item.id}>
+                        <div className="media-card" key={item.id}>
+                            {item.fileKind === "image" && item.fileUrl ? (
+                                <AuthenticatedImage className="media-card-image" srcPath={item.fileUrl} alt={item.fileName || item.title} />
+                            ) : null}
                             <strong>{item.title}</strong>
                             <p>{item.description || "暂无说明"}</p>
                             <div className="list-item-actions">
