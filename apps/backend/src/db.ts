@@ -26,7 +26,7 @@ if (!fs.existsSync(dataDir)) {
 export const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 
-const TEXT_REPAIR_VERSION = "2026-04-25-encoding-v3";
+const TEXT_REPAIR_VERSION = "2026-04-25-encoding-v4";
 const shouldSeedDemoData = (): boolean => {
     const explicit = process.env.ENABLE_DEMO_SEED === "true";
     if (explicit) {

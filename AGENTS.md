@@ -528,3 +528,15 @@
   - 执行 `npm run check:text -w @ms/backend` 通过。
   - 执行 `npm run build -w @ms/backend` 通过。
   - 执行 `npm run build -w @ms/frontend` 通过。
+
+## 2026-04-25 15:38:07 +0800
+
+- 继续收敛 UTF-8 被 GBK/GB18030 误读的短姓名修复：
+  - `apps/backend/src/utils/text.ts` 新增 `寮犳垐 -> 张戈`、`寮犱笁 -> 张三` 同类模式识别，并把 UTF-8-as-GBK 误读特征集中到独立规则列表。
+  - 收紧候选选择条件：恢复候选必须至少包含 2 个中文字符，且长度不能异常缩短，避免 `寮犱笁` 被错误选成单字候选。
+  - `apps/backend/src/db.ts` 文本维护版本升级到 `2026-04-25-encoding-v4`，线上重启后会再次后台修复历史库文本。
+  - `apps/backend/src/utils/text-repair-check.ts` 增加 `张戈`、`寮犳垐`、`寮犱笁` 回归样例。
+  - `README.md`、`GUIDE.md` 同步补充 `寮犳垐` 乱码示例。
+- 验证结果：
+  - 执行 `npm run check:text -w @ms/backend` 通过。
+  - 执行 `npm run build -w @ms/backend` 通过。
