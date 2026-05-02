@@ -372,6 +372,21 @@ textarea:focus {
     min-width: 0;
 }
 
+.major-filter-form {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.major-filter-form label,
+.major-filter-form select,
+.major-filter-form input {
+    min-width: 0;
+    width: 100%;
+}
+
+.major-exam-field {
+    grid-column: span 2;
+}
+
 .file-upload-row {
     display: grid;
     gap: 10px;
@@ -589,11 +604,40 @@ textarea:focus {
 
 .score-profile-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 10px 18px;
+    align-items: start;
     padding: 12px 0;
     border-top: 1px solid var(--border-warm);
     border-bottom: 1px solid var(--border-warm);
+    font-family: "Helvetica Neue", "PingFang SC", sans-serif;
+}
+
+.score-profile-score {
+    color: var(--brand);
+    font-size: 24px;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+
+.score-profile-copy {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.score-profile-meta {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+.score-profile-method {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0;
 }
 
 .match-reach {
@@ -1103,6 +1147,14 @@ td {
     }
 
     .inline-form {
+        grid-template-columns: 1fr;
+    }
+
+    .major-exam-field {
+        grid-column: 1 / -1;
+    }
+
+    .score-profile-strip {
         grid-template-columns: 1fr;
     }
 

@@ -563,3 +563,12 @@
   - 执行 `npm run check:text -w @ms/backend` 通过。
   - 执行 `npm run build -w @ms/backend` 通过。
   - 执行 `npm run build -w @ms/frontend` 通过。
+
+## 2026-05-02 16:25:47 +0800
+
+- 修复院校推荐筛选栏长考试名展示问题：
+  - `apps/frontend/src/components/CareerPanel.tsx` 为“推荐院校与近三年录取分”筛选区增加专用样式类，并让“指定考试”字段可占更宽列。
+  - `apps/frontend/src/styles.css` 增加 `major-filter-form`、`major-exam-field` 响应式规则，避免长考试名撑破网格并与“分数口径”重合。
+- 优化成绩画像说明排版：
+  - 将折算分、考试科目、计算方法拆成统一的分数区与说明文案区，减少 `span/small` 默认样式造成的字体割裂。
+  - 窄屏下成绩画像说明自动单列显示，避免文字溢出。

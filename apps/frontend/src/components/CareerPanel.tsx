@@ -531,7 +531,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
 
             <article className="panel-card wide">
                 <h4>推荐院校与近三年录取分</h4>
-                <div className="inline-form section-actions">
+                <div className="inline-form section-actions major-filter-form">
                     <label>
                         考试范围
                         <select value={majorFilters.examMode} onChange={(event) => setMajorFilters((prev) => ({ ...prev, examMode: event.target.value as MajorExamMode }))}>
@@ -541,7 +541,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
                             <option value="specific">指定考试</option>
                         </select>
                     </label>
-                    <label>
+                    <label className="major-exam-field">
                         指定考试
                         <select value={majorFilters.examKey} onChange={(event) => setMajorFilters((prev) => ({ ...prev, examKey: event.target.value, examMode: "specific" }))}>
                             {(majorData?.filters.exams ?? []).map((item) => (
@@ -580,9 +580,13 @@ export const CareerPanel = ({ user }: { user: User }) => {
                 </div>
                 {majorData ? (
                     <div className="score-profile-strip">
-                        <strong>{majorData.scoreProfile.scaledScore} 分</strong>
-                        <span>{majorData.scoreProfile.examName} / {majorData.scoreProfile.subjects.length > 0 ? majorData.scoreProfile.subjects.join("、") : "手动分数"}</span>
-                        <small>{majorData.scoreProfile.method}</small>
+                        <strong className="score-profile-score">{majorData.scoreProfile.scaledScore} 分</strong>
+                        <div className="score-profile-copy">
+                            <span className="score-profile-meta">
+                                {majorData.scoreProfile.examName} / {majorData.scoreProfile.subjects.length > 0 ? majorData.scoreProfile.subjects.join("、") : "手动分数"}
+                            </span>
+                            <p className="score-profile-method">{majorData.scoreProfile.method}</p>
+                        </div>
                     </div>
                 ) : null}
                 <div className="table-scroll">
