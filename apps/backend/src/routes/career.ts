@@ -19,7 +19,18 @@ const generateSchema = z.object({
     supplementalContext: z.string().optional()
 });
 
+const majorRecommendationQuerySchema = z.object({
+    studentId: z.coerce.number().int().positive(),
+    examMode: z.enum(["latest", "specific", "recent3Weighted", "trendFit"]).default("recent3Weighted"),
+    scoreMode: z.enum(["gaokaoSixSubjectScale", "allSubjectScale", "rawTotal", "manual"]).default("gaokaoSixSubjectScale"),
+    examKey: z.string().optional(),
+    manualScore: z.coerce.number().min(0).max(750).optional(),
+    keyword: z.string().optional(),
+    matchLevel: z.enum(["all", "reach", "match", "safe"]).default("all")
+});
+
 const combinations = getAllAllowedCombinations();
+const CORE_SUBJECTS = ["语文", "数学", "英语"];
 
 export const careerRouter = Router();
 
@@ -256,6 +267,263 @@ const sendSse = (res: Response, event: string, payload: unknown): void => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
 
+type ExamGroup = {
+    key: string;
+    examName: string;
+    examDate: string;
+    rows: Array<{ subject: string; avgScore: number }>;
+};
+
+const buildExamGroups = (scoreRows: NonNullable<ReturnType<typeof loadStudentContext>>["scoreRows"]): ExamGroup[] => {
+    const grouped = new Map<string, ExamGroup>();
+    scoreRows.forEach((row) => {
+        const examName = normalizeExamName(row.examName) || repairText(row.examName);
+        const key = `${row.examDate}__${examName}`;
+        const existing = grouped.get(key) ?? { key, examName, examDate: row.examDate, rows: [] };
+        existing.rows.push({ subject: repairText(row.subject), avgScore: Number(row.avgScore) });
+        grouped.set(key, existing);
+    });
+    return Array.from(grouped.values()).sort((left, right) => left.examDate.localeCompare(right.examDate));
+};
+
+const getStudentSelectedSubjects = (student: NonNullable<ReturnType<typeof loadStudentContext>>["student"], exam: ExamGroup): string[] => {
+    const explicitSubjects = [student.firstSelectedSubject, student.secondSelectedSubject, student.thirdSelectedSubject]
+        .map((item) => repairText(item ?? ""))
+        .filter(Boolean);
+    const combinationSubjects = repairText(student.subjectCombination ?? "")
+        .split("+")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    const selected = [...new Set([...explicitSubjects, ...combinationSubjects])].filter((item) => !CORE_SUBJECTS.includes(item));
+    if (selected.length >= 3) {
+        return selected.slice(0, 3);
+    }
+
+    const fallbackSubjects = exam.rows
+        .filter((row) => !CORE_SUBJECTS.includes(row.subject))
+        .sort((left, right) => right.avgScore - left.avgScore)
+        .map((row) => row.subject);
+    return [...new Set([...selected, ...fallbackSubjects])].slice(0, 3);
+};
+
+const sumSubjects = (exam: ExamGroup, subjects: string[]): { rawScore: number; maxScore: number; subjects: string[] } => {
+    const subjectMap = new Map(exam.rows.map((row) => [row.subject, row.avgScore]));
+    const usedSubjects = subjects.filter((subject) => subjectMap.has(subject));
+    const rawScore = usedSubjects.reduce((total, subject) => total + (subjectMap.get(subject) ?? 0), 0);
+    return { rawScore, maxScore: usedSubjects.length * 100, subjects: usedSubjects };
+};
+
+const calcExamScore = (
+    exam: ExamGroup,
+    student: NonNullable<ReturnType<typeof loadStudentContext>>["student"],
+    scoreMode: z.infer<typeof majorRecommendationQuerySchema>["scoreMode"],
+    manualScore?: number
+): { rawScore: number; scaledScore: number; subjects: string[]; method: string } => {
+    if (scoreMode === "manual") {
+        const score = Number(manualScore ?? 0);
+        return { rawScore: score, scaledScore: score, subjects: [], method: "手动输入分数，直接用于录取分差匹配。" };
+    }
+
+    if (scoreMode === "allSubjectScale") {
+        const rawScore = exam.rows.reduce((total, row) => total + row.avgScore, 0);
+        const maxScore = Math.max(exam.rows.length * 100, 1);
+        return {
+            rawScore,
+            scaledScore: Number(((rawScore / maxScore) * 750).toFixed(1)),
+            subjects: exam.rows.map((row) => row.subject),
+            method: "全科均分折算：最近考试参与科目总分 / 科目满分 × 750。"
+        };
+    }
+
+    if (scoreMode === "rawTotal") {
+        const rawScore = exam.rows.reduce((total, row) => total + row.avgScore, 0);
+        return {
+            rawScore: Number(rawScore.toFixed(1)),
+            scaledScore: Number(rawScore.toFixed(1)),
+            subjects: exam.rows.map((row) => row.subject),
+            method: "原始总分：直接使用该次考试已导入科目总分，不做 750 分折算。"
+        };
+    }
+
+    const selectedSubjects = [...CORE_SUBJECTS, ...getStudentSelectedSubjects(student, exam)];
+    const result = sumSubjects(exam, selectedSubjects);
+    return {
+        rawScore: Number(result.rawScore.toFixed(1)),
+        scaledScore: Number(((result.rawScore / Math.max(result.maxScore, 1)) * 750).toFixed(1)),
+        subjects: result.subjects,
+        method: "六科折算：语文、数学、英语加当前选科三科；缺少明确选科时，用非核心科目中较高的三科临时补足，并按 750 分折算。"
+    };
+};
+
+const pickScoreProfile = (
+    groups: ExamGroup[],
+    student: NonNullable<ReturnType<typeof loadStudentContext>>["student"],
+    query: z.infer<typeof majorRecommendationQuerySchema>
+) => {
+    const ordered = [...groups].sort((left, right) => left.examDate.localeCompare(right.examDate));
+    const latest = ordered.at(-1);
+    if (!latest) {
+        return null;
+    }
+
+    const calcOne = (exam: ExamGroup) => calcExamScore(exam, student, query.scoreMode, query.manualScore);
+    const examOptions = ordered.map((exam) => ({ key: exam.key, examName: exam.examName, examDate: exam.examDate }));
+
+    if (query.scoreMode === "manual") {
+        const score = calcOne(latest);
+        return {
+            examKey: "manual",
+            examName: "手动输入",
+            examDate: latest.examDate,
+            rawScore: score.rawScore,
+            scaledScore: score.scaledScore,
+            subjects: score.subjects,
+            method: score.method,
+            examOptions
+        };
+    }
+
+    if (query.examMode === "specific") {
+        const target = ordered.find((exam) => exam.key === query.examKey) ?? latest;
+        const score = calcOne(target);
+        return { examKey: target.key, examName: target.examName, examDate: target.examDate, ...score, examOptions };
+    }
+
+    if (query.examMode === "latest") {
+        const score = calcOne(latest);
+        return { examKey: latest.key, examName: latest.examName, examDate: latest.examDate, ...score, examOptions };
+    }
+
+    const recent = ordered.slice(-3);
+    const scored = recent.map((exam) => ({ exam, score: calcOne(exam).scaledScore }));
+    if (query.examMode === "trendFit" && scored.length >= 2) {
+        const weights = scored.map((_, index) => index + 1);
+        const weightTotal = weights.reduce((sum, item) => sum + item, 0);
+        const weightedAverage = scored.reduce((sum, item, index) => sum + item.score * weights[index], 0) / weightTotal;
+        const first = scored[0].score;
+        const last = scored.at(-1)?.score ?? first;
+        const slopeCorrection = Math.max(-25, Math.min(25, (last - first) / Math.max(scored.length - 1, 1)));
+        return {
+            examKey: "trendFit",
+            examName: `趋势拟合（近 ${scored.length} 次）`,
+            examDate: latest.examDate,
+            rawScore: Number(weightedAverage.toFixed(1)),
+            scaledScore: Number(Math.max(0, Math.min(750, weightedAverage + slopeCorrection)).toFixed(1)),
+            subjects: calcOne(latest).subjects,
+            method: "时间衰减加权线性趋势：越新的考试权重越高，先计算加权均值，再用首末成绩趋势做斜率修正，单次修正限制在 ±25 分。",
+            examOptions
+        };
+    }
+
+    const weights = recent.map((_, index) => index + 1);
+    const weightTotal = weights.reduce((sum, item) => sum + item, 0);
+    const weighted = recent.reduce((sum, exam, index) => sum + calcOne(exam).scaledScore * weights[index], 0) / weightTotal;
+    return {
+        examKey: "recent3Weighted",
+        examName: `最近 ${recent.length} 次加权`,
+        examDate: latest.examDate,
+        rawScore: Number(weighted.toFixed(1)),
+        scaledScore: Number(weighted.toFixed(1)),
+        subjects: calcOne(latest).subjects,
+        method: "最近三次时间衰减加权：按 1:2:3 给予近期考试更高权重，降低单次考试偶然波动影响。",
+        examOptions
+    };
+};
+
+const matchesRequiredSubjects = (requiredSubjects: string, selectedSubjects: string[]): boolean => {
+    const normalized = repairText(requiredSubjects);
+    const limitedPart = normalized.replace(/不限/g, "").trim();
+    if (!limitedPart) {
+        return true;
+    }
+    if (limitedPart.includes("或")) {
+        return limitedPart.split("或").some((item) => selectedSubjects.includes(item.trim()));
+    }
+    return limitedPart.split("+").every((item) => {
+        const subject = item.replace("不限", "").trim();
+        return !subject || selectedSubjects.includes(subject);
+    });
+};
+
+const classifyScoreGap = (gap: number): "reach" | "match" | "safe" => {
+    if (gap < -15) {
+        return "reach";
+    }
+    if (gap <= 25) {
+        return "match";
+    }
+    return "safe";
+};
+
+const matchLevelLabelMap = {
+    reach: "冲刺",
+    match: "匹配",
+    safe: "保底"
+} as const;
+
+const buildMajorRecommendations = (
+    scoreProfile: NonNullable<ReturnType<typeof pickScoreProfile>>,
+    selectedSubjects: string[],
+    keyword: string,
+    matchLevel: "all" | "reach" | "match" | "safe"
+) => {
+    const rows = db
+        .prepare(
+            `SELECT year, region, university, major, required_subjects as requiredSubjects, reference_score as referenceScore
+             FROM public_major_requirements
+             ORDER BY year DESC, reference_score DESC`
+        )
+        .all() as Array<{ year: number; region: string; university: string; major: string; requiredSubjects: string; referenceScore: number }>;
+
+    const grouped = new Map<string, typeof rows>();
+    rows.forEach((row) => {
+        const key = `${repairText(row.university)}__${repairText(row.major)}`;
+        const current = grouped.get(key) ?? [];
+        current.push(row);
+        grouped.set(key, current);
+    });
+
+    return Array.from(grouped.values())
+        .map((items) => {
+            const sorted = [...items].sort((left, right) => right.year - left.year);
+            const latest = sorted[0];
+            const admissionScores = sorted.slice(0, 3).map((item) => ({ year: item.year, score: item.referenceScore, region: repairText(item.region) }));
+            const scores = admissionScores.map((item) => item.score);
+            const averageScore = Number((scores.reduce((sum, score) => sum + score, 0) / Math.max(scores.length, 1)).toFixed(1));
+            const scoreGap = Number((scoreProfile.scaledScore - averageScore).toFixed(1));
+            const level = classifyScoreGap(scoreGap);
+            return {
+                university: repairText(latest.university),
+                major: repairText(latest.major),
+                requiredSubjects: repairText(latest.requiredSubjects),
+                matchLevel: level,
+                matchLevelLabel: matchLevelLabelMap[level],
+                subjectMatched: matchesRequiredSubjects(latest.requiredSubjects, selectedSubjects),
+                scoreGap,
+                admissionScores,
+                averageScore,
+                minScore: Math.min(...scores),
+                maxScore: Math.max(...scores),
+                historyComplete: admissionScores.length >= 3
+            };
+        })
+        .filter((item) => matchLevel === "all" || item.matchLevel === matchLevel)
+        .filter((item) => {
+            const normalizedKeyword = keyword.trim().toLowerCase();
+            if (!normalizedKeyword) {
+                return true;
+            }
+            return `${item.university}${item.major}${item.requiredSubjects}`.toLowerCase().includes(normalizedKeyword);
+        })
+        .sort((left, right) => {
+            if (left.subjectMatched !== right.subjectMatched) {
+                return left.subjectMatched ? -1 : 1;
+            }
+            return Math.abs(left.scoreGap) - Math.abs(right.scoreGap);
+        })
+        .slice(0, 40);
+};
+
 careerRouter.get("/public-data/major-requirements", requireAuth, (_req, res) => {
     const rows = db
         .prepare(
@@ -265,6 +533,65 @@ careerRouter.get("/public-data/major-requirements", requireAuth, (_req, res) => 
         )
         .all();
     res.json({ success: true, message: "查询成功", data: rows });
+});
+
+careerRouter.get("/major-recommendations", requireAuth, (req: AuthedRequest, res) => {
+    const parsed = majorRecommendationQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+        res.status(400).json({ success: false, message: "院校推荐查询参数不合法" });
+        return;
+    }
+
+    const input = parsed.data;
+    if (input.scoreMode === "manual" && typeof input.manualScore !== "number") {
+        res.status(400).json({ success: false, message: "手动分数模式需要输入有效分数" });
+        return;
+    }
+
+    if (!canAccessStudent(req, input.studentId)) {
+        res.status(403).json({ success: false, message: "无权查看该学生院校推荐" });
+        return;
+    }
+
+    const context = loadStudentContext(input.studentId);
+    if (!context) {
+        res.status(404).json({ success: false, message: "学生不存在" });
+        return;
+    }
+
+    const groups = buildExamGroups(context.scoreRows);
+    const scoreProfile = pickScoreProfile(groups, context.student, input);
+    if (!scoreProfile) {
+        res.status(404).json({ success: false, message: "未找到该学生成绩数据" });
+        return;
+    }
+
+    const selectedSubjects = [...CORE_SUBJECTS, ...getStudentSelectedSubjects(context.student, groups.at(-1) ?? groups[0])];
+    const recommendations = buildMajorRecommendations(scoreProfile, selectedSubjects, repairText(input.keyword ?? ""), input.matchLevel);
+
+    res.json({
+        success: true,
+        message: "查询成功",
+        data: {
+            scoreProfile: {
+                ...scoreProfile,
+                scoreMode: input.scoreMode,
+                examMode: input.examMode,
+                selectedSubjects
+            },
+            recommendations,
+            filters: {
+                exams: scoreProfile.examOptions,
+                years: [...new Set(recommendations.flatMap((item) => item.admissionScores.map((score) => score.year)))].sort((left, right) => right - left),
+                matchLevels: [
+                    { value: "all", label: "全部" },
+                    { value: "reach", label: "冲刺" },
+                    { value: "match", label: "匹配" },
+                    { value: "safe", label: "保底" }
+                ]
+            }
+        }
+    });
 });
 
 careerRouter.get("/recommendations/:studentId", requireAuth, (req: AuthedRequest, res) => {

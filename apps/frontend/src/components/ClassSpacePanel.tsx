@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AuthenticatedImage } from "./AuthenticatedImage";
+import { AuthenticatedImage, preloadAuthenticatedImage } from "./AuthenticatedImage";
 import { apiRequest } from "../lib/api";
 import { parseStructuredCommittee, parseStructuredGrid } from "../lib/classProfile";
 
@@ -79,6 +79,16 @@ export const ClassSpacePanel = () => {
     const courseSchedule = useMemo(() => parseStructuredGrid(detail?.profile?.courseSchedule), [detail?.profile?.courseSchedule]);
     const seatMap = useMemo(() => parseStructuredGrid(detail?.profile?.seatMap), [detail?.profile?.seatMap]);
     const committee = useMemo(() => parseStructuredCommittee(detail?.profile?.classCommittee), [detail?.profile?.classCommittee]);
+
+    useEffect(() => {
+        const mediaUrls = [
+            ...(detail?.wellbeingPosts ?? []).map((item) => item.attachmentUrl),
+            ...(detail?.gallery ?? []).map((item) => item.fileUrl)
+        ]
+            .filter((item): item is string => Boolean(item))
+            .slice(0, 4);
+        mediaUrls.forEach((url) => preloadAuthenticatedImage(url));
+    }, [detail]);
 
     return (
         <section className="panel-grid">

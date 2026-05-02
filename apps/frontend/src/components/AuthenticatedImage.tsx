@@ -7,29 +7,57 @@ type AuthenticatedImageProps = {
     className?: string;
 };
 
+const imageObjectUrlCache = new Map<string, string>();
+const imageRequestCache = new Map<string, Promise<string>>();
+
+export const preloadAuthenticatedImage = (srcPath: string): void => {
+    if (!srcPath || imageObjectUrlCache.has(srcPath) || imageRequestCache.has(srcPath)) {
+        return;
+    }
+
+    const request = (async () => {
+        const response = await fetchWithAuth(srcPath);
+        if (!response.ok) {
+            throw new Error("图片加载失败");
+        }
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        imageObjectUrlCache.set(srcPath, objectUrl);
+        return objectUrl;
+    })();
+    imageRequestCache.set(srcPath, request);
+    request.catch(() => imageRequestCache.delete(srcPath));
+};
+
 export const AuthenticatedImage = ({ srcPath, alt, className }: AuthenticatedImageProps) => {
     const [objectUrl, setObjectUrl] = useState("");
     const [failed, setFailed] = useState(false);
 
     useEffect(() => {
-        let activeObjectUrl = "";
         let cancelled = false;
         setObjectUrl("");
         setFailed(false);
 
         const loadImage = async () => {
             try {
-                const response = await fetchWithAuth(srcPath);
-                if (!response.ok) {
+                const cachedUrl = imageObjectUrlCache.get(srcPath);
+                if (cachedUrl) {
+                    setObjectUrl(cachedUrl);
+                    return;
+                }
+
+                preloadAuthenticatedImage(srcPath);
+                const request = imageRequestCache.get(srcPath);
+                if (!request) {
                     throw new Error("图片加载失败");
                 }
-                const blob = await response.blob();
+                const nextObjectUrl = await request;
                 if (cancelled) {
                     return;
                 }
-                activeObjectUrl = URL.createObjectURL(blob);
-                setObjectUrl(activeObjectUrl);
+                setObjectUrl(nextObjectUrl);
             } catch {
+                imageRequestCache.delete(srcPath);
                 if (!cancelled) {
                     setFailed(true);
                 }
@@ -40,9 +68,6 @@ export const AuthenticatedImage = ({ srcPath, alt, className }: AuthenticatedIma
 
         return () => {
             cancelled = true;
-            if (activeObjectUrl) {
-                URL.revokeObjectURL(activeObjectUrl);
-            }
         };
     }, [srcPath]);
 

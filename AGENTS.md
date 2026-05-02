@@ -540,3 +540,26 @@
 - 验证结果：
   - 执行 `npm run check:text -w @ms/backend` 通过。
   - 执行 `npm run build -w @ms/backend` 通过。
+
+## 2026-05-02 15:49:45 +0800
+
+- 新增按成绩画像推荐院校专业：
+  - `apps/backend/src/routes/career.ts` 新增 `GET /api/career/major-recommendations`，支持最近一次、指定考试、最近三次加权、趋势拟合，以及六科折算、全科折算、原始总分、手动分数。
+  - 院校专业按分差分为冲刺、匹配、保底，并返回已有年份录取分、最高/最低/平均分、当前分差和选科匹配结果。
+  - `apps/backend/src/db.ts` 补齐 `public_major_requirements` 演示数据到 2023-2025，真实库不足三年时只展示已有年份。
+- 前端生涯选科页升级：
+  - `apps/frontend/src/components/CareerPanel.tsx` 将公开专业要求区改为“推荐院校与近三年录取分”，增加学生、考试范围、指定考试、分数模式、手动分、关键词和冲稳保筛选。
+  - 保留原有选科生成、确认、导出和进入 AI 助手入口。
+- 当前待办可点击处理请假：
+  - `OverviewPanel` 的“请假待处理”和 `HeadTeacherPanel` 的“当前待办”跳转到 `/dashboard/home-school?focus=leave&status=pending`。
+  - `HomeSchoolPanel` 读取查询参数后自动定位到请假进度，并筛选/高亮待处理请假。
+- 图片加载加速与 UI 去卡片化：
+  - `apps/backend/src/routes/classSpace.ts` 的媒体接口增加私有缓存、`ETag`、`Last-Modified` 与 304 支持。
+  - `apps/frontend/src/components/AuthenticatedImage.tsx` 增加全局 Blob URL 缓存，`ClassSpacePanel` 对首屏图片做轻量预取。
+  - `apps/frontend/src/styles.css` 按 `DESIGN.md` 收敛首页、选科、班级治理、组织架构等页面的容器层级，减少卡片套卡片、重阴影和过多边框。
+- 文档同步：
+  - 更新 `README.md` 与 `GUIDE.md`，补充院校推荐算法、请假待办跳转、图片缓存策略和 UI 调整说明。
+- 验证结果：
+  - 执行 `npm run check:text -w @ms/backend` 通过。
+  - 执行 `npm run build -w @ms/backend` 通过。
+  - 执行 `npm run build -w @ms/frontend` 通过。

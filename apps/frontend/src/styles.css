@@ -255,18 +255,16 @@ textarea:focus {
 
 .app-main-content {
     display: grid;
-    gap: 18px;
+    gap: 22px;
     flex: 1;
 }
 
 .top-header {
-    background: linear-gradient(120deg, rgba(201, 100, 66, 0.18), rgba(255, 255, 255, 0.4));
-    border: 1px solid var(--border-cream);
-    border-radius: 20px;
-    padding: 18px;
+    background: transparent;
+    border-bottom: 1px solid var(--border-warm);
+    padding: 4px 0 18px;
     display: grid;
     gap: 10px;
-    backdrop-filter: blur(2px);
 }
 
 .mobile-nav-toggle {
@@ -287,21 +285,23 @@ textarea:focus {
 .panel-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    gap: 0 22px;
     animation: fadeIn 0.45s ease;
 }
 
 .panel-card {
-    background: var(--bg-ivory);
-    border: 1px solid var(--border-cream);
-    border-radius: var(--radius-lg);
-    padding: 16px;
-    box-shadow: var(--shadow-soft);
+    background: transparent;
+    border-top: 1px solid var(--border-warm);
+    border-radius: 0;
+    padding: 22px 0;
+    box-shadow: none;
 }
 
 .panel-card.hero {
     grid-column: 1 / -1;
-    background: linear-gradient(135deg, #faf9f5 0%, #efece1 100%);
+    background: transparent;
+    border-top: 0;
+    padding-top: 8px;
 }
 
 .panel-card h3,
@@ -311,6 +311,22 @@ textarea:focus {
 
 .panel-card.wide {
     grid-column: 1 / -1;
+}
+
+.action-card {
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    width: 100%;
+}
+
+.action-card:hover h3,
+.action-card:hover .metric {
+    color: var(--brand);
 }
 
 .metric {
@@ -325,8 +341,8 @@ textarea:focus {
 }
 
 .role-item {
-    background: white;
-    border: 1px solid var(--border-warm);
+    background: rgba(250, 249, 245, 0.72);
+    border: 1px solid var(--border-cream);
     border-radius: var(--radius-sm);
     padding: 10px;
     display: grid;
@@ -571,6 +587,30 @@ textarea:focus {
     border-color: rgba(201, 100, 66, 0.3);
 }
 
+.score-profile-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border-warm);
+    border-bottom: 1px solid var(--border-warm);
+}
+
+.match-reach {
+    color: #9b3d2d;
+    background: rgba(201, 100, 66, 0.1);
+}
+
+.match-match {
+    color: #5d5a28;
+    background: rgba(177, 154, 73, 0.16);
+}
+
+.match-safe {
+    color: #2c6e49;
+    background: rgba(44, 110, 73, 0.12);
+}
+
 .funnel-list {
     display: grid;
     gap: 8px;
@@ -583,6 +623,25 @@ textarea:focus {
     border-radius: var(--radius-sm);
     border: 1px dashed var(--border-warm);
     background: white;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    width: 100%;
+}
+
+.funnel-item:hover {
+    border-color: rgba(201, 100, 66, 0.45);
+    color: var(--brand);
+}
+
+.funnel-item.passive {
+    cursor: default;
+}
+
+.funnel-item.passive:hover {
+    border-color: var(--border-warm);
+    color: inherit;
 }
 
 .table-scroll {
@@ -600,6 +659,10 @@ td {
     border-bottom: 1px solid var(--border-cream);
     padding: 8px;
     text-align: left;
+}
+
+.highlight-row {
+    background: rgba(201, 100, 66, 0.08);
 }
 
 .btn-row {
@@ -856,14 +919,16 @@ td {
 .structured-editor {
     display: grid;
     gap: 12px;
-    padding: 14px;
-    border: 1px solid var(--border-warm);
-    border-radius: var(--radius-md);
-    background: white;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
 }
 
 .career-supplement-card {
-    background: linear-gradient(180deg, rgba(201, 100, 66, 0.06), rgba(255, 255, 255, 0.96));
+    border-left: 1px solid var(--border-warm);
+    padding-left: 16px;
+    background: transparent;
 }
 
 .career-supplement-input {
@@ -944,10 +1009,10 @@ td {
 .org-subcard {
     display: grid;
     gap: 10px;
-    padding: 12px;
-    border: 1px solid var(--border-warm);
-    border-radius: var(--radius-md);
-    background: white;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--border-warm);
+    border-radius: 0;
+    background: transparent;
 }
 
 .org-subcard h5 {

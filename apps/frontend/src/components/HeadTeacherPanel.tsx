@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
 import { createGrid, parseStructuredCommittee, parseStructuredGrid, randomizeSeatGrid, serializeStructuredCommittee, serializeStructuredGrid, updateGridCell, type StructuredCommitteeMember, type StructuredCommitteeValue, type StructuredGridValue } from "../lib/classProfile";
 import { riskLevelLabelMap } from "../lib/labels";
@@ -59,6 +60,7 @@ type GroupScoreResponse = { records: Array<{ id: number; groupName: string; acti
 type GalleryItem = { id: number; className: string; title: string; description: string; activityDate?: string | null; fileName?: string | null; fileKind?: "image" | "file" | null; fileUrl?: string | null; createdAt: string };
 
 export const HeadTeacherPanel = () => {
+    const navigate = useNavigate();
     const [className, setClassName] = useState("");
     const [workbench, setWorkbench] = useState<WorkbenchData | null>(null);
     const [profileData, setProfileData] = useState<ClassProfileData | null>(null);
@@ -196,8 +198,18 @@ export const HeadTeacherPanel = () => {
             <article className="panel-card">
                 <h4>当前待办</h4>
                 <div className="funnel-list">
-                    {workbench?.todoFunnel.map((item) => (
-                        <div className="funnel-item" key={item.stage}>
+                    {workbench?.todoFunnel.map((item) => item.stage === "待处理请假" ? (
+                        <button
+                            type="button"
+                            className="funnel-item"
+                            key={item.stage}
+                            onClick={() => navigate("/dashboard/home-school?focus=leave&status=pending")}
+                        >
+                            <span>{item.stage}</span>
+                            <strong>{item.count}</strong>
+                        </button>
+                    ) : (
+                        <div className="funnel-item passive" key={item.stage}>
                             <span>{item.stage}</span>
                             <strong>{item.count}</strong>
                         </div>

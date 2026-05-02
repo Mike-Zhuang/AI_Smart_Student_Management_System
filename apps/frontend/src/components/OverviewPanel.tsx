@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
 import { roleLabelMap } from "../lib/labels";
 import type { User } from "../lib/types";
@@ -14,6 +15,7 @@ type LeaveOverview = Array<{ status: string }>;
 type StudentOverview = Array<{ id: number; name: string; grade: string; className: string }>;
 
 export const OverviewPanel = ({ user }: { user: User }) => {
+    const navigate = useNavigate();
     const [overview, setOverview] = useState<OverviewData | null>(null);
     const [students, setStudents] = useState<StudentOverview>([]);
     const [leaveRequests, setLeaveRequests] = useState<LeaveOverview>([]);
@@ -86,11 +88,11 @@ export const OverviewPanel = ({ user }: { user: User }) => {
                 <strong className="metric">{students.length}</strong>
             </article>
 
-            <article className="panel-card">
+            <button type="button" className="panel-card action-card" onClick={() => navigate("/dashboard/home-school?focus=leave&status=pending")}>
                 <h4>请假待处理</h4>
                 <strong className="metric">{leaveSummary.pending}</strong>
                 <p className="muted-text">当前可见请假共 {leaveSummary.total} 条</p>
-            </article>
+            </button>
 
             <article className="panel-card">
                 <h4>已批准请假</h4>

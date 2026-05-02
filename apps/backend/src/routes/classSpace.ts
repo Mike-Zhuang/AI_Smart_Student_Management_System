@@ -103,6 +103,17 @@ const sendProtectedMedia = (
         return;
     }
 
+    const stat = fs.statSync(row.filePath);
+    const etag = `"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+    res.setHeader("Cache-Control", "private, max-age=86400");
+    res.setHeader("ETag", etag);
+    res.setHeader("Last-Modified", stat.mtime.toUTCString());
+    const ifModifiedSince = typeof req.headers["if-modified-since"] === "string" ? Date.parse(req.headers["if-modified-since"]) : Number.NaN;
+    if (req.headers["if-none-match"] === etag || (!Number.isNaN(ifModifiedSince) && stat.mtime.getTime() <= ifModifiedSince + 1000)) {
+        res.status(304).end();
+        return;
+    }
+
     if (getFileKind(row.filePath) === "image") {
         res.type(path.extname(row.filePath).toLowerCase() === ".webp" ? "image/webp" : path.extname(row.filePath));
     } else if (row.fileName) {

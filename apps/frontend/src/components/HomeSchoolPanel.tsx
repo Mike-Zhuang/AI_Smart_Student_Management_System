@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api";
 import type { SupportedModel } from "../lib/ai";
 import { leaveStatusLabelMap, leaveTypeLabelMap, mapLabel, parentConfirmStatusLabelMap } from "../lib/labels";
@@ -42,6 +42,8 @@ type LeaveItem = {
 
 export const HomeSchoolPanel = ({ user }: { user: User }) => {
     const navigate = useNavigate();
+    const location = useLocation();
+    const leaveSectionRef = useRef<HTMLElement | null>(null);
     const [messages, setMessages] = useState<MessageItem[]>([]);
     const [students, setStudents] = useState<StudentOption[]>([]);
     const [leaves, setLeaves] = useState<LeaveItem[]>([]);
@@ -96,11 +98,26 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
 
     const canBroadcast = user.role === "admin" || user.role === "teacher" || user.role === "head_teacher";
     const canApprove = user.role === "admin" || user.role === "head_teacher";
+    const query = new URLSearchParams(location.search);
+    const shouldFocusLeave = query.get("focus") === "leave";
+    const shouldFilterPending = query.get("status") === "pending";
 
     const pendingCount = useMemo(
         () => leaves.filter((item) => ["pending_parent_confirm", "pending_head_teacher_review"].includes(item.status)).length,
         [leaves]
     );
+    const visibleLeaves = useMemo(() => {
+        if (!shouldFilterPending) {
+            return leaves;
+        }
+        return leaves.filter((item) => ["pending_parent_confirm", "pending_head_teacher_review"].includes(item.status));
+    }, [leaves, shouldFilterPending]);
+
+    useEffect(() => {
+        if (shouldFocusLeave && leaves.length >= 0) {
+            window.setTimeout(() => leaveSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+        }
+    }, [shouldFocusLeave, leaves.length]);
 
     const onSend = async (event: FormEvent) => {
         event.preventDefault();
@@ -308,9 +325,10 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                 </div>
             </article>
 
-            <article className="panel-card wide">
+            <article className="panel-card wide" ref={leaveSectionRef}>
                 <h4>请假进度</h4>
                 <div className="inline-form section-actions">
+                    {shouldFilterPending ? <span className="status-pill is-unread">仅显示待处理</span> : null}
                     <button className="secondary-btn" onClick={() => void downloadExport("/api/admin/export/module/leave-requests", "leave-requests")}>导出请假记录</button>
                     {canApprove ? (
                         <ConfirmActionButton
@@ -348,8 +366,8 @@ export const HomeSchoolPanel = ({ user }: { user: User }) => {
                             </tr>
                         </thead>
                         <tbody>
-                            {leaves.map((item) => (
-                                <tr key={item.id}>
+                            {visibleLeaves.map((item) => (
+                                <tr key={item.id} className={["pending_parent_confirm", "pending_head_teacher_review"].includes(item.status) ? "highlight-row" : ""}>
                                     {canApprove ? (
                                         <td>
                                             <input
