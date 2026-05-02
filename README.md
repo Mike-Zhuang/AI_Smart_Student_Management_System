@@ -157,6 +157,7 @@ pnpm run build:pnpm
 - 趋势拟合采用时间衰减加权线性趋势：越新的考试权重越高，再用首末成绩变化做有限斜率修正，避免单次波动过度影响推荐。
 - 推荐结果按分差分为冲刺、匹配、保底，并展示高校、专业、选科要求、已有年份录取分、平均分和当前分差。
 - 近三年分数只读取库中已有真实年份；如果某专业不足三年，页面会提示历史数据不足三年，不会编造缺失年份。
+- 内置高校录取分仅为演示参考数据，不代表官方录取线。真实使用前请在“数据导入”中导入学校整理的官方录取分，或手动新增/编辑具体分数线。
 
 ### 6.3 真实数据导入
 
@@ -176,15 +177,18 @@ pnpm run build:pnpm
 - apps/backend/templates/students-template.csv
 - apps/backend/templates/exam-results-template.csv
 - apps/backend/templates/teachers-template.csv
+- apps/backend/templates/major-requirements-template.csv
 - apps/backend/templates/students-template.xlsx
 - apps/backend/templates/exam-results-template.xlsx
 - apps/backend/templates/teachers-template.xlsx
+- apps/backend/templates/major-requirements-template.xlsx
 
 导入接口：
 
 - POST /api/data-import/students（`multipart/form-data`，字段名 `file`）
 - POST /api/data-import/exam-results（`multipart/form-data`，字段名 `file`）
 - POST /api/data-import/teachers（`multipart/form-data`，字段名 `file`）
+- POST /api/data-import/major-requirements（`multipart/form-data`，字段名 `file`）
 
 说明：
 
@@ -192,6 +196,7 @@ pnpm run build:pnpm
 - 管理员、班主任、教师均可执行数据导入与账号发放。
 - 学生导入会自动同步学生账号，并自动生成主家长账号；教师导入会自动同步教师账号。
 - 导入页面同时提供学生、成绩、教师关系的批量删除入口，并新增整班级联删除，便于回滚错误数据。
+- 院校专业录取分支持导入、查询、手动新增、编辑和删除；同一年、同地区、同高校、同专业重复导入会更新已有记录。
 - 教师关系删除会保留历史审计与会话一致性；若教师失去全部班级关系且账号被同步删除，相关审计会自动转交给“系统审计保留”身份，避免外键失败导致页面 500。
 - 账号重置密码也会自动形成新的发放批次，避免一次性密码只弹出一次后丢失。
 - 所有删除操作都需要先确认，避免误触。

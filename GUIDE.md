@@ -152,6 +152,7 @@
 - 默认使用“最近三次加权 + 六科折算到 750 分”，也可切换最近一次考试、指定考试、趋势拟合、全科折算、原始总分或手动分数
 - 趋势拟合采用时间衰减加权线性趋势，越新的考试权重越高，并限制斜率修正，避免一次异常波动把推荐带偏
 - 如果某个专业库中不足三年录取分，只展示已有年份，并提示“历史数据不足三年”
+- 内置录取分为演示参考数据，页面会显示来源标记；正式使用前应在“数据导入”导入官方整理数据或手动维护分数线
 
 常用接口：
 
@@ -270,30 +271,37 @@
 
 操作建议：
 
-1. 下载对应 XLSX 模板（学生/成绩/教师班级）
+1. 下载对应 XLSX 模板（学生/成绩/教师班级/院校专业录取分）
 2. 在模板中按列填写数据并保存为 XLSX；如有需要也可继续上传 CSV
 3. 在页面选择 XLSX / CSV 文件并点击“上传导入”
 4. 查看导入汇总（总行数、新增、更新、失败）
 5. 若系统自动发放了新账号，立即下载账号发放单
 6. 若本次错过下载，可跳转到“我的账号”查看本次发放批次并再次下载未改密账号
 7. 若存在失败行，按行号与字段提示修正后重传
-8. 若导入有误，可在同页批量删除学生、成绩、教师关系，或直接执行整班级联删除
+8. 若导入有误，可在同页批量删除学生、成绩、教师关系、录取分记录，或直接执行整班级联删除
 
 模板文件：
 
 - apps/backend/templates/students-template.csv
 - apps/backend/templates/exam-results-template.csv
 - apps/backend/templates/teachers-template.csv
+- apps/backend/templates/major-requirements-template.csv
+- apps/backend/templates/major-requirements-template.xlsx
 
 常用接口：
 
 - POST /api/data-import/students（`multipart/form-data`，字段名 `file`）
 - POST /api/data-import/exam-results（`multipart/form-data`，字段名 `file`）
 - POST /api/data-import/teachers（`multipart/form-data`，字段名 `file`）
+- POST /api/data-import/major-requirements（`multipart/form-data`，字段名 `file`）
 - GET /api/data-import/exam-results/manage
 - POST /api/data-import/exam-results/batch-delete
 - GET /api/data-import/teachers/manage
 - POST /api/data-import/teachers/batch-delete
+- GET /api/data-import/major-requirements/manage
+- POST /api/data-import/major-requirements/manual
+- PATCH /api/data-import/major-requirements/:id
+- POST /api/data-import/major-requirements/batch-delete
 - POST /api/students/batch-delete
 - POST /api/students/classes/batch-delete
 
@@ -302,6 +310,7 @@
 - 导入页面默认不展示 JSON 编辑框，避免手工转换成本。
 - 重复导入同一批数据会按业务键做更新，不会表现为“点了没反应”。
 - 系统兼容 UTF-8 / GBK / GB18030 CSV 与 XLSX。
+- 院校专业录取分导入同样走编码检测和中文修复链路；同一年、同地区、同高校、同专业会更新已有记录。
 - 教师班级关系删除会同步处理历史会话、账号发放与审计引用，删除最后一条教师关系时不应再出现服务器内部错误。
 - 系统会对上传文件、列名、单元格、入库前文本、历史数据库和查询输出做统一乱码修复，重点处理 `锟斤拷`、`瀛﹂敓...`、`�`、异常考试名称等问题。
 - 学生导入会自动同步学生账号并生成主家长账号；教师导入会自动同步教师账号。

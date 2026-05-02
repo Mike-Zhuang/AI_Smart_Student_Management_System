@@ -82,6 +82,16 @@ type TeacherImportRow = {
     subjectName?: string;
 };
 
+type MajorRequirementImportRow = {
+    year: number;
+    region: string;
+    university: string;
+    major: string;
+    requiredSubjects: string;
+    referenceScore: number;
+    dataSource: string;
+};
+
 type AccountSyncResult = "created" | "updated" | "existing";
 
 const studentRowSchema = z.object({
@@ -109,6 +119,16 @@ const teacherRowSchema = z.object({
     displayName: z.string().min(2, "教师姓名不能为空"),
     className: z.string().min(2, "班级不能为空"),
     subjectName: z.string().optional()
+});
+
+const majorRequirementRowSchema = z.object({
+    year: z.number().int("年份必须是整数").min(2000, "年份不能早于2000年").max(2100, "年份不能晚于2100年"),
+    region: z.string().min(2, "地区不能为空"),
+    university: z.string().min(2, "高校不能为空"),
+    major: z.string().min(2, "专业不能为空"),
+    requiredSubjects: z.string().min(1, "选科要求不能为空"),
+    referenceScore: z.number().min(0, "录取分不能小于0").max(750, "录取分不能大于750"),
+    dataSource: z.string().min(2, "数据来源不能为空")
 });
 
 const upload = multer({
@@ -388,6 +408,57 @@ const parseTeacherRow = (row: SheetRecord, line: number, errors: ImportErrorItem
     };
 };
 
+const normalizeDataSource = (value: unknown, fallback: "imported" | "manual"): string => {
+    const text = toRequiredString(value);
+    if (!text) {
+        return fallback;
+    }
+    if (["演示", "演示数据", "demo", "demo_seed"].includes(text.toLowerCase())) {
+        return "demo_seed";
+    }
+    if (["手动", "手动维护", "manual"].includes(text.toLowerCase())) {
+        return "manual";
+    }
+    if (["导入", "导入数据", "import", "imported"].includes(text.toLowerCase())) {
+        return "imported";
+    }
+    return assertSafeBusinessText(text, { fieldName: "数据来源", maxLength: 80 });
+};
+
+const parseMajorRequirementRow = (
+    row: SheetRecord,
+    line: number,
+    errors: ImportErrorItem[],
+    fallbackSource: "imported" | "manual"
+): MajorRequirementImportRow | null => {
+    const yearRaw = pickValue(row, ["year", "年份"]);
+    const scoreRaw = pickValue(row, ["referenceScore", "reference_score", "录取分", "分数线", "参考分"]);
+    const candidate = {
+        year: typeof yearRaw === "number" ? yearRaw : Number(toRequiredString(yearRaw)),
+        region: toRequiredString(pickValue(row, ["region", "地区", "省份"])),
+        university: toRequiredString(pickValue(row, ["university", "高校", "院校", "学校"])),
+        major: toRequiredString(pickValue(row, ["major", "专业"])),
+        requiredSubjects: toRequiredString(pickValue(row, ["requiredSubjects", "required_subjects", "选科要求"])),
+        referenceScore: typeof scoreRaw === "number" ? scoreRaw : Number(toRequiredString(scoreRaw)),
+        dataSource: normalizeDataSource(pickValue(row, ["dataSource", "data_source", "数据来源", "来源"]), fallbackSource)
+    };
+
+    const parsed = majorRequirementRowSchema.safeParse(candidate);
+    if (!parsed.success) {
+        appendZodErrors(errors, line, parsed.error);
+        return null;
+    }
+
+    return {
+        ...parsed.data,
+        region: assertSafeBusinessText(parsed.data.region, { fieldName: "地区", required: true, maxLength: 40 }),
+        university: assertSafeBusinessText(parsed.data.university, { fieldName: "高校", required: true, maxLength: 80 }),
+        major: assertSafeBusinessText(parsed.data.major, { fieldName: "专业", required: true, maxLength: 80 }),
+        requiredSubjects: assertSafeBusinessText(parsed.data.requiredSubjects, { fieldName: "选科要求", required: true, maxLength: 80 }),
+        referenceScore: Number(parsed.data.referenceScore)
+    };
+};
+
 const buildSummary = (total: number): ImportSummary => ({
     total,
     imported: 0,
@@ -656,7 +727,8 @@ dataImportRouter.get("/templates", (_req, res) => {
                 "displayName"
             ],
             examResults: ["studentNo", "examName", "examDate", "subject", "score"],
-            teachers: ["teacherUsername", "displayName", "className", "isHeadTeacher", "subjectName"]
+            teachers: ["teacherUsername", "displayName", "className", "isHeadTeacher", "subjectName"],
+            majorRequirements: ["year", "region", "university", "major", "requiredSubjects", "referenceScore", "dataSource"]
         }
     });
 });
@@ -676,6 +748,10 @@ dataImportRouter.get("/template-files/:type", (req, res) => {
         teachers: {
             csv: "teachers-template.csv",
             xlsx: "teachers-template.xlsx"
+        },
+        "major-requirements": {
+            csv: "major-requirements-template.csv",
+            xlsx: "major-requirements-template.xlsx"
         }
     };
 
@@ -946,6 +1022,89 @@ dataImportRouter.post("/teachers", uploadSheet, (req: AuthedRequest, res) => {
     res.json({ success: true, message, data: summary });
 });
 
+const upsertMajorRequirementRows = (
+    rows: Array<{ line: number; data: MajorRequirementImportRow }>,
+    summary: ImportSummary
+): void => {
+    const findExisting = db.prepare(
+        `SELECT id
+         FROM public_major_requirements
+         WHERE year = ? AND region = ? AND university = ? AND major = ?
+         LIMIT 1`
+    );
+    const insertRow = db.prepare(
+        `INSERT INTO public_major_requirements (
+            year, region, university, major, required_subjects, reference_score, data_source, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const updateRow = db.prepare(
+        `UPDATE public_major_requirements
+         SET required_subjects = ?, reference_score = ?, data_source = ?, updated_at = ?
+         WHERE id = ?`
+    );
+
+    const runImport = db.transaction((items: Array<{ line: number; data: MajorRequirementImportRow }>) => {
+        for (const item of items) {
+            const row = item.data;
+            const existing = findExisting.get(row.year, row.region, row.university, row.major) as { id: number } | undefined;
+            const now = dayjs().toISOString();
+            if (existing) {
+                updateRow.run(row.requiredSubjects, row.referenceScore, row.dataSource, now, existing.id);
+                summary.updated += 1;
+            } else {
+                insertRow.run(row.year, row.region, row.university, row.major, row.requiredSubjects, row.referenceScore, row.dataSource, now);
+                summary.imported += 1;
+            }
+        }
+    });
+
+    runImport(rows);
+};
+
+dataImportRouter.post("/major-requirements", uploadSheet, (req: AuthedRequest, res) => {
+    const resolved = resolveRows(req);
+    if (!resolved) {
+        res.status(400).json({ success: false, message: "请上传 CSV/XLSX 文件，或传入 JSON 格式 rows 数组" });
+        return;
+    }
+    try {
+        assertImportSizeSafe(resolved.rows);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error instanceof Error ? error.message : "导入数据超出限制" });
+        return;
+    }
+
+    const { rows, lineOffset, source } = resolved;
+    const summary = buildSummary(rows.length);
+    const validRows: Array<{ line: number; data: MajorRequirementImportRow }> = [];
+
+    rows.forEach((row, index) => {
+        const line = index + lineOffset;
+        const parsed = parseMajorRequirementRow(row, line, summary.errors, "imported");
+        if (parsed) {
+            validRows.push({ line, data: parsed });
+        }
+    });
+
+    upsertMajorRequirementRows(validRows, summary);
+    summary.failed = calcFailedLineCount(summary.errors);
+
+    if (req.user) {
+        logAudit({
+            userId: req.user.id,
+            actionModule: "data-import",
+            actionType: "import_major_requirements",
+            objectType: "public_major_requirements",
+            detail: { source, ...summary },
+            ipAddress: extractIp(req)
+        });
+    }
+
+    const message = summary.failed > 0 ? `导入完成，${summary.failed} 行失败` : "导入完成";
+    res.json({ success: true, message, data: summary });
+});
+
 dataImportRouter.get("/exam-results/manage", (req: AuthedRequest, res) => {
     const examName = typeof req.query.examName === "string" ? (normalizeExamName(req.query.examName) || repairText(req.query.examName)) : "";
     const examDate = typeof req.query.examDate === "string" ? req.query.examDate : "";
@@ -996,6 +1155,158 @@ dataImportRouter.post("/exam-results/batch-delete", (req: AuthedRequest, res) =>
         ipAddress: extractIp(req)
     });
     res.json({ success: true, message: `已删除 ${parsed.data.ids.length} 条成绩记录` });
+});
+
+const majorSourceLabelMap: Record<string, string> = {
+    demo_seed: "演示数据",
+    imported: "导入数据",
+    manual: "手动维护"
+};
+
+const mapMajorRequirementRow = (row: Record<string, unknown>): Record<string, unknown> => {
+    const repaired = repairRecordStrings(row);
+    const dataSource = String(repaired.dataSource ?? "demo_seed");
+    return {
+        ...repaired,
+        dataSource,
+        dataSourceLabel: majorSourceLabelMap[dataSource] ?? dataSource
+    };
+};
+
+dataImportRouter.get("/major-requirements/manage", (req: AuthedRequest, res) => {
+    const keyword = typeof req.query.keyword === "string" ? repairText(req.query.keyword).trim().toLowerCase() : "";
+    const year = typeof req.query.year === "string" ? Number(req.query.year) : 0;
+    const dataSource = typeof req.query.dataSource === "string" ? repairText(req.query.dataSource).trim() : "";
+
+    let rows = db
+        .prepare(
+            `SELECT id, year, region, university, major, required_subjects as requiredSubjects,
+                    reference_score as referenceScore, data_source as dataSource, updated_at as updatedAt
+             FROM public_major_requirements
+             ORDER BY year DESC, university ASC, major ASC
+             LIMIT 500`
+        )
+        .all() as Array<Record<string, unknown>>;
+
+    rows = rows.map(mapMajorRequirementRow);
+    if (keyword) {
+        rows = rows.filter((item) =>
+            [item.region, item.university, item.major, item.requiredSubjects].some((value) => String(value ?? "").toLowerCase().includes(keyword))
+        );
+    }
+    if (year) {
+        rows = rows.filter((item) => Number(item.year) === year);
+    }
+    if (dataSource) {
+        rows = rows.filter((item) => String(item.dataSource) === dataSource);
+    }
+
+    res.json({ success: true, message: "查询成功", data: rows });
+});
+
+dataImportRouter.post("/major-requirements/manual", (req: AuthedRequest, res) => {
+    const summary = buildSummary(1);
+    const parsed = parseMajorRequirementRow(req.body as SheetRecord, 1, summary.errors, "manual");
+    if (!parsed || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法", data: summary });
+        return;
+    }
+
+    upsertMajorRequirementRows([{ line: 1, data: { ...parsed, dataSource: "manual" } }], summary);
+    logAudit({
+        userId: req.user.id,
+        actionModule: "data-import",
+        actionType: "manual_upsert_major_requirement",
+        objectType: "public_major_requirements",
+        detail: summary,
+        ipAddress: extractIp(req)
+    });
+    res.json({ success: true, message: summary.updated > 0 ? "已更新分数线" : "已新增分数线", data: summary });
+});
+
+dataImportRouter.patch("/major-requirements/:id", (req: AuthedRequest, res) => {
+    const id = Number(req.params.id);
+    const summary = buildSummary(1);
+    const parsed = parseMajorRequirementRow(req.body as SheetRecord, 1, summary.errors, "manual");
+    if (!Number.isInteger(id) || id <= 0 || !parsed || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法", data: summary });
+        return;
+    }
+
+    const result = db.prepare(
+        `UPDATE public_major_requirements
+         SET year = ?, region = ?, university = ?, major = ?, required_subjects = ?,
+             reference_score = ?, data_source = ?, updated_at = ?
+         WHERE id = ?`
+    ).run(
+        parsed.year,
+        parsed.region,
+        parsed.university,
+        parsed.major,
+        parsed.requiredSubjects,
+        parsed.referenceScore,
+        "manual",
+        dayjs().toISOString(),
+        id
+    );
+
+    if (result.changes === 0) {
+        res.status(404).json({ success: false, message: "分数线记录不存在" });
+        return;
+    }
+
+    logAudit({
+        userId: req.user.id,
+        actionModule: "data-import",
+        actionType: "update_major_requirement",
+        objectType: "public_major_requirements",
+        objectId: id,
+        detail: parsed,
+        ipAddress: extractIp(req)
+    });
+    res.json({ success: true, message: "已更新分数线" });
+});
+
+dataImportRouter.delete("/major-requirements/:id", (req: AuthedRequest, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0 || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+    const result = db.prepare("DELETE FROM public_major_requirements WHERE id = ?").run(id);
+    if (result.changes === 0) {
+        res.status(404).json({ success: false, message: "分数线记录不存在" });
+        return;
+    }
+    logAudit({
+        userId: req.user.id,
+        actionModule: "data-import",
+        actionType: "delete_major_requirement",
+        objectType: "public_major_requirements",
+        objectId: id,
+        detail: { id },
+        ipAddress: extractIp(req)
+    });
+    res.json({ success: true, message: "已删除分数线" });
+});
+
+dataImportRouter.post("/major-requirements/batch-delete", (req: AuthedRequest, res) => {
+    const parsed = z.object({ ids: z.array(z.number().int().positive()).min(1) }).safeParse(req.body);
+    if (!parsed.success || !req.user) {
+        res.status(400).json({ success: false, message: "参数不合法" });
+        return;
+    }
+
+    const result = db.prepare(`DELETE FROM public_major_requirements WHERE id IN (${parsed.data.ids.map(() => "?").join(",")})`).run(...parsed.data.ids);
+    logAudit({
+        userId: req.user.id,
+        actionModule: "data-import",
+        actionType: "delete_major_requirements",
+        objectType: "public_major_requirements",
+        detail: { ids: parsed.data.ids, count: result.changes },
+        ipAddress: extractIp(req)
+    });
+    res.json({ success: true, message: `已删除 ${result.changes} 条分数线记录`, data: { count: result.changes } });
 });
 
 dataImportRouter.get("/teachers/manage", (req: AuthedRequest, res) => {

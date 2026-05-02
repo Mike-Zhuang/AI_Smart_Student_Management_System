@@ -469,8 +469,13 @@ textarea:focus {
 }
 
 .status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-size: 12px;
     padding: 3px 8px;
+    min-height: 24px;
+    line-height: 1.2;
     border-radius: 999px;
     border: 1px solid var(--border-warm);
     white-space: nowrap;
@@ -1044,6 +1049,20 @@ td {
     gap: 14px;
 }
 
+.org-grade-card {
+    margin-top: 18px;
+    padding-top: 26px;
+    border-top: 4px solid rgba(20, 20, 19, 0.18);
+}
+
+.org-grade-card:first-of-type {
+    margin-top: 0;
+}
+
+.org-grade-card h4 {
+    font-size: 24px;
+}
+
 .org-detail-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1054,9 +1073,28 @@ td {
     display: grid;
     gap: 10px;
     padding: 12px 0 0;
-    border-top: 1px solid var(--border-warm);
+    border-top: 1px solid var(--border-cream);
     border-radius: 0;
     background: transparent;
+}
+
+.org-class-card {
+    margin-top: 10px;
+    padding: 18px 0 0;
+    border-top: 2px solid rgba(201, 100, 66, 0.28);
+}
+
+.org-inner-card {
+    padding: 12px 0 0;
+    border-top: 1px dashed var(--border-warm);
+}
+
+.org-roster-card {
+    margin-top: 4px;
+}
+
+.org-status-pill {
+    min-width: 92px;
 }
 
 .org-subcard h5 {

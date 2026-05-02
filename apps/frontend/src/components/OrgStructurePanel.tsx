@@ -184,7 +184,7 @@ export const OrgStructurePanel = () => {
                     groupedClasses.map(([grade, items]) => {
                         const gradeExpanded = expandedGrades.includes(grade);
                         return (
-                            <article key={grade} className="panel-card wide org-card">
+                            <article key={grade} className="panel-card wide org-card org-grade-card">
                                 <div className="list-item-header">
                                     <div>
                                         <h4>{grade}</h4>
@@ -217,14 +217,14 @@ export const OrgStructurePanel = () => {
                                 {gradeExpanded ? items.map((item) => {
                                     const classExpanded = expandedClasses.includes(item.className);
                                     return (
-                                        <div key={item.className} className="org-subcard">
+                                        <div key={item.className} className="org-subcard org-class-card">
                                             <div className="list-item-header">
                                                 <div>
                                                     <h5>{item.className}</h5>
                                                     <p className="muted-text">学生 {item.studentCount} 人</p>
                                                 </div>
                                                 <div className="account-actions">
-                                                    <span className="status-pill">{item.headTeachers.length > 0 ? "班主任已配置" : "班主任待完善"}</span>
+                                                    <span className="status-pill org-status-pill">{item.headTeachers.length > 0 ? "班主任已配置" : "班主任待完善"}</span>
                                                     <button
                                                         type="button"
                                                         className="secondary-btn"
@@ -240,7 +240,7 @@ export const OrgStructurePanel = () => {
                                             </div>
 
                                             <div className="org-detail-grid">
-                                                <div className="org-subcard">
+                                                <div className="org-subcard org-inner-card">
                                                     <h5>班主任</h5>
                                                     {item.headTeachers.length > 0 ? (
                                                         <ul className="timeline-list">
@@ -256,7 +256,7 @@ export const OrgStructurePanel = () => {
                                                     )}
                                                 </div>
 
-                                                <div className="org-subcard">
+                                                <div className="org-subcard org-inner-card">
                                                     <h5>科任教师</h5>
                                                     {item.teachers.length > 0 ? (
                                                         <div className="table-scroll">
@@ -288,7 +288,7 @@ export const OrgStructurePanel = () => {
                                             </div>
 
                                             {classExpanded ? (
-                                                <div className="org-subcard">
+                                                <div className="org-subcard org-inner-card org-roster-card">
                                                     <h5>学生花名册</h5>
                                                     {item.students.length > 0 ? (
                                                         <div className="table-scroll">

@@ -1,11 +1,11 @@
-import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import { apiRequest } from "../lib/api";
 import { downloadFile } from "../lib/export";
 import { ConfirmActionButton } from "./ConfirmActionButton";
 
-type ImportKind = "students" | "exam-results" | "teachers";
+type ImportKind = "students" | "exam-results" | "teachers" | "major-requirements";
 type ManageKind = ImportKind;
 
 type ImportSummary = {
@@ -61,6 +61,28 @@ type TeacherLinkRow = {
     isHeadTeacher: number;
 };
 
+type MajorRequirementRow = {
+    id: number;
+    year: number;
+    region: string;
+    university: string;
+    major: string;
+    requiredSubjects: string;
+    referenceScore: number;
+    dataSource: string;
+    dataSourceLabel: string;
+    updatedAt?: string | null;
+};
+
+type MajorRequirementForm = {
+    year: string;
+    region: string;
+    university: string;
+    major: string;
+    requiredSubjects: string;
+    referenceScore: string;
+};
+
 type ImportFeedback = {
     type: "success" | "error";
     message: string;
@@ -98,19 +120,38 @@ const IMPORT_CONFIG: Array<{
         templateEndpoint: "/api/data-import/template-files/teachers",
         templateFilename: "teachers-template.xlsx",
         uploadEndpoint: "/api/data-import/teachers"
+    },
+    {
+        kind: "major-requirements",
+        title: "院校专业录取分",
+        description: "导入年份、地区、高校、专业、选科要求与录取分，用于替换演示参考数据。",
+        templateEndpoint: "/api/data-import/template-files/major-requirements",
+        templateFilename: "major-requirements-template.xlsx",
+        uploadEndpoint: "/api/data-import/major-requirements"
     }
 ];
 
 const defaultFiles: Record<ImportKind, File | null> = {
     students: null,
     "exam-results": null,
-    teachers: null
+    teachers: null,
+    "major-requirements": null
 };
 
 const defaultFeedback: Record<ImportKind, ImportFeedback | null> = {
     students: null,
     "exam-results": null,
-    teachers: null
+    teachers: null,
+    "major-requirements": null
+};
+
+const defaultMajorRequirementForm: MajorRequirementForm = {
+    year: String(new Date().getFullYear()),
+    region: "黑龙江",
+    university: "",
+    major: "",
+    requiredSubjects: "",
+    referenceScore: ""
 };
 
 export const DataImportPanel = () => {
@@ -133,10 +174,19 @@ export const DataImportPanel = () => {
     const [teacherKeyword, setTeacherKeyword] = useState("");
     const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
 
+    const [majorRows, setMajorRows] = useState<MajorRequirementRow[]>([]);
+    const [majorKeyword, setMajorKeyword] = useState("");
+    const [majorYearFilter, setMajorYearFilter] = useState("");
+    const [majorSourceFilter, setMajorSourceFilter] = useState("");
+    const [selectedMajorIds, setSelectedMajorIds] = useState<number[]>([]);
+    const [majorForm, setMajorForm] = useState<MajorRequirementForm>(defaultMajorRequirementForm);
+    const [editingMajorId, setEditingMajorId] = useState<number | null>(null);
+
     const [manageFeedback, setManageFeedback] = useState<Record<ManageKind, string>>({
         students: "",
         "exam-results": "",
-        teachers: ""
+        teachers: "",
+        "major-requirements": ""
     });
     const [managingKind, setManagingKind] = useState<ManageKind | null>(null);
 
@@ -162,15 +212,31 @@ export const DataImportPanel = () => {
         setTeacherRows(response.data);
     };
 
+    const loadMajorRows = async () => {
+        const query = new URLSearchParams();
+        if (majorKeyword.trim()) {
+            query.set("keyword", majorKeyword.trim());
+        }
+        if (majorYearFilter.trim()) {
+            query.set("year", majorYearFilter);
+        }
+        if (majorSourceFilter.trim()) {
+            query.set("dataSource", majorSourceFilter);
+        }
+        const response = await apiRequest<MajorRequirementRow[]>(`/api/data-import/major-requirements/manage${query.size ? `?${query.toString()}` : ""}`);
+        setMajorRows(response.data);
+    };
+
     const loadManageData = async () => {
         try {
-            await Promise.all([loadStudents(), loadExamRows(), loadTeacherRows()]);
+            await Promise.all([loadStudents(), loadExamRows(), loadTeacherRows(), loadMajorRows()]);
         } catch (error) {
             const message = error instanceof Error ? error.message : "加载数据管理列表失败";
             setManageFeedback({
                 students: message,
                 "exam-results": message,
-                teachers: message
+                teachers: message,
+                "major-requirements": message
             });
         }
     };
@@ -182,6 +248,10 @@ export const DataImportPanel = () => {
     useEffect(() => {
         void loadExamRows();
     }, [examKeyword, examDateFilter]);
+
+    useEffect(() => {
+        void loadMajorRows();
+    }, [majorKeyword, majorYearFilter, majorSourceFilter]);
 
     const filteredStudents = useMemo(() => {
         const keyword = studentKeyword.trim().toLowerCase();
@@ -292,7 +362,8 @@ export const DataImportPanel = () => {
             });
 
             const summary = response.data;
-            const message = `总计 ${summary.total} 行，新增 ${summary.imported} 条，更新 ${summary.updated} 条，失败 ${summary.failed} 行。账号新建 ${summary.accountCreated} 个，账号更新 ${summary.accountUpdated} 个。`;
+            const accountText = kind === "major-requirements" ? "" : `账号新建 ${summary.accountCreated} 个，账号更新 ${summary.accountUpdated} 个。`;
+            const message = `总计 ${summary.total} 行，新增 ${summary.imported} 条，更新 ${summary.updated} 条，失败 ${summary.failed} 行。${accountText}`;
             setFeedback((prev) => ({
                 ...prev,
                 [kind]: {
@@ -378,6 +449,87 @@ export const DataImportPanel = () => {
             await loadTeacherRows();
         } catch (error) {
             setManageFeedback((prev) => ({ ...prev, teachers: error instanceof Error ? error.message : "批量删除教师班级关系失败" }));
+        } finally {
+            setManagingKind(null);
+        }
+    };
+
+    const resetMajorForm = () => {
+        setMajorForm(defaultMajorRequirementForm);
+        setEditingMajorId(null);
+    };
+
+    const editMajorRow = (row: MajorRequirementRow) => {
+        setEditingMajorId(row.id);
+        setMajorForm({
+            year: String(row.year),
+            region: row.region,
+            university: row.university,
+            major: row.major,
+            requiredSubjects: row.requiredSubjects,
+            referenceScore: String(row.referenceScore)
+        });
+    };
+
+    const submitMajorForm = async (event: FormEvent) => {
+        event.preventDefault();
+        setManagingKind("major-requirements");
+        setManageFeedback((prev) => ({ ...prev, "major-requirements": "" }));
+        const payload = {
+            ...majorForm,
+            year: Number(majorForm.year),
+            referenceScore: Number(majorForm.referenceScore),
+            dataSource: "manual"
+        };
+        try {
+            const endpoint = editingMajorId ? `/api/data-import/major-requirements/${editingMajorId}` : "/api/data-import/major-requirements/manual";
+            const method = editingMajorId ? "PATCH" : "POST";
+            const response = await apiRequest(endpoint, { method, body: JSON.stringify(payload) });
+            setManageFeedback((prev) => ({ ...prev, "major-requirements": response.message }));
+            resetMajorForm();
+            await loadMajorRows();
+        } catch (error) {
+            setManageFeedback((prev) => ({ ...prev, "major-requirements": error instanceof Error ? error.message : "保存录取分失败" }));
+        } finally {
+            setManagingKind(null);
+        }
+    };
+
+    const batchDeleteMajorRows = async () => {
+        if (selectedMajorIds.length === 0) {
+            return;
+        }
+
+        setManagingKind("major-requirements");
+        setManageFeedback((prev) => ({ ...prev, "major-requirements": "" }));
+        try {
+            const response = await apiRequest<{ count?: number }>("/api/data-import/major-requirements/batch-delete", {
+                method: "POST",
+                body: JSON.stringify({ ids: selectedMajorIds })
+            });
+            setManageFeedback((prev) => ({ ...prev, "major-requirements": response.message }));
+            setSelectedMajorIds([]);
+            await loadMajorRows();
+        } catch (error) {
+            setManageFeedback((prev) => ({ ...prev, "major-requirements": error instanceof Error ? error.message : "批量删除录取分失败" }));
+        } finally {
+            setManagingKind(null);
+        }
+    };
+
+    const deleteMajorRow = async (id: number) => {
+        setManagingKind("major-requirements");
+        setManageFeedback((prev) => ({ ...prev, "major-requirements": "" }));
+        try {
+            const response = await apiRequest(`/api/data-import/major-requirements/${id}`, { method: "DELETE" });
+            setManageFeedback((prev) => ({ ...prev, "major-requirements": response.message }));
+            setSelectedMajorIds((prev) => prev.filter((item) => item !== id));
+            if (editingMajorId === id) {
+                resetMajorForm();
+            }
+            await loadMajorRows();
+        } catch (error) {
+            setManageFeedback((prev) => ({ ...prev, "major-requirements": error instanceof Error ? error.message : "删除录取分失败" }));
         } finally {
             setManagingKind(null);
         }
@@ -716,6 +868,133 @@ export const DataImportPanel = () => {
                             {filteredTeachers.length === 0 ? (
                                 <tr>
                                     <td colSpan={6} className="muted-text">未找到匹配教师关系。</td>
+                                </tr>
+                            ) : null}
+                        </tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article className="panel-card wide">
+                <h3>录取分数据维护</h3>
+                <p>当前内置高校录取分仅为演示参考。请导入官方整理表，或在这里手动新增、修正、删除某条分数线。</p>
+                <form className="inline-form section-actions" onSubmit={(event) => void submitMajorForm(event)}>
+                    <label>
+                        年份
+                        <input type="number" min={2000} max={2100} value={majorForm.year} onChange={(event) => setMajorForm((prev) => ({ ...prev, year: event.target.value }))} required />
+                    </label>
+                    <label>
+                        地区
+                        <input value={majorForm.region} onChange={(event) => setMajorForm((prev) => ({ ...prev, region: event.target.value }))} required />
+                    </label>
+                    <label>
+                        高校
+                        <input value={majorForm.university} onChange={(event) => setMajorForm((prev) => ({ ...prev, university: event.target.value }))} required />
+                    </label>
+                    <label>
+                        专业
+                        <input value={majorForm.major} onChange={(event) => setMajorForm((prev) => ({ ...prev, major: event.target.value }))} required />
+                    </label>
+                    <label>
+                        选科要求
+                        <input value={majorForm.requiredSubjects} onChange={(event) => setMajorForm((prev) => ({ ...prev, requiredSubjects: event.target.value }))} placeholder="例如：物理+化学" required />
+                    </label>
+                    <label>
+                        录取分
+                        <input type="number" min={0} max={750} value={majorForm.referenceScore} onChange={(event) => setMajorForm((prev) => ({ ...prev, referenceScore: event.target.value }))} required />
+                    </label>
+                    <button type="submit" className="primary-btn" disabled={managingKind === "major-requirements"}>
+                        {editingMajorId ? "保存修改" : "手动新增分数线"}
+                    </button>
+                    {editingMajorId ? (
+                        <button type="button" className="secondary-btn" onClick={resetMajorForm}>
+                            取消编辑
+                        </button>
+                    ) : null}
+                </form>
+                <div className="inline-form section-actions">
+                    <label>
+                        搜索高校/专业/地区
+                        <input value={majorKeyword} onChange={(event) => setMajorKeyword(event.target.value)} placeholder="输入高校、专业、地区或选科要求" />
+                    </label>
+                    <label>
+                        年份
+                        <input type="number" min={2000} max={2100} value={majorYearFilter} onChange={(event) => setMajorYearFilter(event.target.value)} placeholder="全部年份" />
+                    </label>
+                    <label>
+                        来源
+                        <select value={majorSourceFilter} onChange={(event) => setMajorSourceFilter(event.target.value)}>
+                            <option value="">全部来源</option>
+                            <option value="demo_seed">演示数据</option>
+                            <option value="imported">导入数据</option>
+                            <option value="manual">手动维护</option>
+                        </select>
+                    </label>
+                    <button type="button" className="secondary-btn" onClick={() => void loadMajorRows()}>
+                        刷新录取分
+                    </button>
+                    <ConfirmActionButton
+                        className="primary-btn"
+                        disabled={selectedMajorIds.length === 0 || managingKind === "major-requirements"}
+                        loadingText="删除中..."
+                        buttonText={`批量删除分数线（${selectedMajorIds.length}）`}
+                        confirmTitle="确认批量删除录取分"
+                        confirmMessage={`确定删除选中的 ${selectedMajorIds.length} 条录取分记录吗？删除后选科页推荐会同步变化。`}
+                        onConfirm={batchDeleteMajorRows}
+                    />
+                </div>
+                {manageFeedback["major-requirements"] ? <p className={manageFeedback["major-requirements"].includes("失败") ? "error-text" : "success-text"}>{manageFeedback["major-requirements"]}</p> : null}
+                <div className="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>年份</th>
+                                <th>地区</th>
+                                <th>高校</th>
+                                <th>专业</th>
+                                <th>选科要求</th>
+                                <th>录取分</th>
+                                <th>来源</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {majorRows.map((item) => (
+                                <tr key={item.id}>
+                                    <td>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedMajorIds.includes(item.id)}
+                                            onChange={(event) =>
+                                                setSelectedMajorIds((prev) => (event.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id)))
+                                            }
+                                        />
+                                    </td>
+                                    <td>{item.year}</td>
+                                    <td>{item.region}</td>
+                                    <td>{item.university}</td>
+                                    <td>{item.major}</td>
+                                    <td>{item.requiredSubjects}</td>
+                                    <td>{item.referenceScore}</td>
+                                    <td><span className="status-pill">{item.dataSourceLabel}</span></td>
+                                    <td>
+                                        <button type="button" className="secondary-btn" onClick={() => editMajorRow(item)}>
+                                            编辑
+                                        </button>
+                                        <ConfirmActionButton
+                                            buttonText="删除"
+                                            confirmTitle="确认删除录取分"
+                                            confirmMessage={`确定删除 ${item.year} 年 ${item.university} ${item.major} 的录取分记录吗？`}
+                                            onConfirm={() => deleteMajorRow(item.id)}
+                                            disabled={managingKind === "major-requirements"}
+                                        />
+                                    </td>
+                                </tr>
+                            ))}
+                            {majorRows.length === 0 ? (
+                                <tr>
+                                    <td colSpan={9} className="muted-text">当前筛选条件下暂无录取分记录。</td>
                                 </tr>
                             ) : null}
                         </tbody>

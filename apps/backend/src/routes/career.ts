@@ -461,6 +461,24 @@ const matchLevelLabelMap = {
     safe: "保底"
 } as const;
 
+const dataSourceLabelMap: Record<string, string> = {
+    demo_seed: "演示数据",
+    imported: "导入数据",
+    manual: "手动维护"
+};
+
+const getDataSourceLabel = (value: string): string => dataSourceLabelMap[value] ?? value;
+
+const getDataSourcePriority = (value: string): number => {
+    if (value === "manual") {
+        return 3;
+    }
+    if (value && value !== "demo_seed") {
+        return 2;
+    }
+    return 1;
+};
+
 const buildMajorRecommendations = (
     scoreProfile: NonNullable<ReturnType<typeof pickScoreProfile>>,
     selectedSubjects: string[],
@@ -469,11 +487,12 @@ const buildMajorRecommendations = (
 ) => {
     const rows = db
         .prepare(
-            `SELECT year, region, university, major, required_subjects as requiredSubjects, reference_score as referenceScore
+            `SELECT year, region, university, major, required_subjects as requiredSubjects,
+                    reference_score as referenceScore, data_source as dataSource
              FROM public_major_requirements
              ORDER BY year DESC, reference_score DESC`
         )
-        .all() as Array<{ year: number; region: string; university: string; major: string; requiredSubjects: string; referenceScore: number }>;
+        .all() as Array<{ year: number; region: string; university: string; major: string; requiredSubjects: string; referenceScore: number; dataSource: string }>;
 
     const grouped = new Map<string, typeof rows>();
     rows.forEach((row) => {
@@ -485,9 +504,24 @@ const buildMajorRecommendations = (
 
     return Array.from(grouped.values())
         .map((items) => {
-            const sorted = [...items].sort((left, right) => right.year - left.year);
+            const preferredItems = items.some((item) => getDataSourcePriority(item.dataSource) > 1)
+                ? items.filter((item) => getDataSourcePriority(item.dataSource) > 1)
+                : items;
+            const sorted = [...preferredItems].sort((left, right) => {
+                const priorityDiff = getDataSourcePriority(right.dataSource) - getDataSourcePriority(left.dataSource);
+                return priorityDiff !== 0 ? priorityDiff : right.year - left.year;
+            });
             const latest = sorted[0];
-            const admissionScores = sorted.slice(0, 3).map((item) => ({ year: item.year, score: item.referenceScore, region: repairText(item.region) }));
+            const admissionScores = sorted
+                .sort((left, right) => right.year - left.year)
+                .slice(0, 3)
+                .map((item) => ({
+                    year: item.year,
+                    score: item.referenceScore,
+                    region: repairText(item.region),
+                    dataSource: item.dataSource,
+                    dataSourceLabel: getDataSourceLabel(item.dataSource)
+                }));
             const scores = admissionScores.map((item) => item.score);
             const averageScore = Number((scores.reduce((sum, score) => sum + score, 0) / Math.max(scores.length, 1)).toFixed(1));
             const scoreGap = Number((scoreProfile.scaledScore - averageScore).toFixed(1));
@@ -499,6 +533,8 @@ const buildMajorRecommendations = (
                 matchLevel: level,
                 matchLevelLabel: matchLevelLabelMap[level],
                 subjectMatched: matchesRequiredSubjects(latest.requiredSubjects, selectedSubjects),
+                dataSource: latest.dataSource,
+                dataSourceLabel: getDataSourceLabel(latest.dataSource),
                 scoreGap,
                 admissionScores,
                 averageScore,
@@ -568,6 +604,10 @@ careerRouter.get("/major-recommendations", requireAuth, (req: AuthedRequest, res
 
     const selectedSubjects = [...CORE_SUBJECTS, ...getStudentSelectedSubjects(context.student, groups.at(-1) ?? groups[0])];
     const recommendations = buildMajorRecommendations(scoreProfile, selectedSubjects, repairText(input.keyword ?? ""), input.matchLevel);
+    const sourceCount = recommendations.reduce<Record<string, number>>((acc, item) => {
+        acc[item.dataSourceLabel] = (acc[item.dataSourceLabel] ?? 0) + 1;
+        return acc;
+    }, {});
 
     res.json({
         success: true,
@@ -588,7 +628,8 @@ careerRouter.get("/major-recommendations", requireAuth, (req: AuthedRequest, res
                     { value: "reach", label: "冲刺" },
                     { value: "match", label: "匹配" },
                     { value: "safe", label: "保底" }
-                ]
+                ],
+                dataSourceSummary: sourceCount
             }
         }
     });

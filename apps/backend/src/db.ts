@@ -207,7 +207,9 @@ const createSchema = (): void => {
       university TEXT NOT NULL,
       major TEXT NOT NULL,
       required_subjects TEXT NOT NULL,
-      reference_score INTEGER NOT NULL
+      reference_score INTEGER NOT NULL,
+      data_source TEXT NOT NULL DEFAULT 'demo_seed',
+      updated_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -484,8 +486,8 @@ const seedPublicData = (): void => {
     ] as const;
 
     const stmt = db.prepare(
-        `INSERT INTO public_major_requirements (year, region, university, major, required_subjects, reference_score)
-     VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO public_major_requirements (year, region, university, major, required_subjects, reference_score, data_source, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'demo_seed', ?)`
     );
     const existsStmt = db.prepare(
         `SELECT 1 FROM public_major_requirements
@@ -495,7 +497,7 @@ const seedPublicData = (): void => {
 
     for (const row of rows) {
         if (!existsStmt.get(row[0], row[1], row[2], row[3])) {
-            stmt.run(...row);
+            stmt.run(...row, dayjs().toISOString());
         }
     }
 };
@@ -1027,6 +1029,19 @@ export const initDatabase = (): void => {
     if (!teacherClassColumns.some((item) => item.name === "subject_name")) {
         db.exec(`ALTER TABLE teacher_class_links ADD COLUMN subject_name TEXT`);
     }
+
+    const majorRequirementColumns = db.prepare(`PRAGMA table_info(public_major_requirements)`).all() as Array<{ name: string }>;
+    if (!majorRequirementColumns.some((item) => item.name === "data_source")) {
+        db.exec(`ALTER TABLE public_major_requirements ADD COLUMN data_source TEXT NOT NULL DEFAULT 'demo_seed'`);
+    }
+    if (!majorRequirementColumns.some((item) => item.name === "updated_at")) {
+        db.exec(`ALTER TABLE public_major_requirements ADD COLUMN updated_at TEXT`);
+    }
+    db.prepare(
+        `UPDATE public_major_requirements
+         SET data_source = 'demo_seed'
+         WHERE data_source IS NULL OR TRIM(data_source) = ''`
+    ).run();
 
     const leaveColumns = db.prepare(`PRAGMA table_info(leave_requests)`).all() as Array<{ name: string }>;
     const leaveColumnDefinitions: Record<string, string> = {

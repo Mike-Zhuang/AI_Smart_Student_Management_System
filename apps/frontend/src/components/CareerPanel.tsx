@@ -49,8 +49,10 @@ type MajorRow = {
     matchLevel: "reach" | "match" | "safe";
     matchLevelLabel: string;
     subjectMatched: boolean;
+    dataSource: string;
+    dataSourceLabel: string;
     scoreGap: number;
-    admissionScores: Array<{ year: number; score: number; region: string }>;
+    admissionScores: Array<{ year: number; score: number; region: string; dataSource: string; dataSourceLabel: string }>;
     averageScore: number;
     minScore: number;
     maxScore: number;
@@ -75,6 +77,7 @@ type MajorRecommendationResponse = {
         exams: Array<{ key: string; examName: string; examDate: string }>;
         years: number[];
         matchLevels: Array<{ value: string; label: string }>;
+        dataSourceSummary?: Record<string, number>;
     };
 };
 
@@ -589,6 +592,9 @@ export const CareerPanel = ({ user }: { user: User }) => {
                         </div>
                     </div>
                 ) : null}
+                {majorData?.filters.dataSourceSummary?.["演示数据"] ? (
+                    <p className="warning-box">当前推荐结果包含演示参考数据，不能作为官方录取线使用。真实使用前请在“数据导入”中导入学校整理的官方录取分。</p>
+                ) : null}
                 <div className="table-scroll">
                     <table>
                         <thead>
@@ -599,6 +605,7 @@ export const CareerPanel = ({ user }: { user: User }) => {
                                 <th>近三年录取分</th>
                                 <th>折算分差</th>
                                 <th>推荐层级</th>
+                                <th>数据来源</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -613,11 +620,12 @@ export const CareerPanel = ({ user }: { user: User }) => {
                                     </td>
                                     <td>{item.scoreGap > 0 ? "+" : ""}{item.scoreGap}（均分 {item.averageScore}）</td>
                                     <td><span className={`status-pill match-${item.matchLevel}`}>{item.matchLevelLabel}</span></td>
+                                    <td><span className="status-pill">{item.dataSourceLabel}</span></td>
                                 </tr>
                             ))}
                             {!majorLoading && (majorData?.recommendations ?? []).length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} className="muted-text">当前筛选条件下暂无匹配院校专业。</td>
+                                    <td colSpan={7} className="muted-text">当前筛选条件下暂无匹配院校专业。</td>
                                 </tr>
                             ) : null}
                         </tbody>
